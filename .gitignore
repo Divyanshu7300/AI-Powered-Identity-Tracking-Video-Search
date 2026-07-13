@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Local environment files
+.env
+.env.*
+!.env.example
+
+# Generated runtime data
+data/
+*.sqlite3
+*.db
+
+# Model weights and runtime downloads
+*.pt
+*.pth
+*.onnx
+*.engine
+
+# Node / Next.js
+node_modules/
+.next/
+.next-build/
+out/
+build/
+
+# Logs
+*.log
+dev-server.err
+dev-server.log
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Local Codex/agent state
+.agents/
+.codex/

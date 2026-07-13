@@ -1,0 +1,9 @@
+.git
+.venv
+__pycache__
+*.pyc
+data
+Frontend/.next
+Frontend/node_modules
+Frontend/dev-server.log
+Frontend/dev-server.err
