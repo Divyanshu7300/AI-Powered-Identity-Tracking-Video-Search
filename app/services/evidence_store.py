@@ -76,6 +76,14 @@ class EvidenceStore:
             color=(52, 226, 197),
         )
 
+    def clear_source(self, source_name: str) -> None:
+        """Remove generated crops and evidence from a source before a rerun."""
+        prefix = f"{self._safe_filename(source_name)}_"
+        for directory in (self.crops_dir, self.evidence_dir):
+            for path in directory.iterdir():
+                if path.is_file() and path.name.startswith(prefix):
+                    path.unlink(missing_ok=True)
+
     def _write_crop(self, filename: str, crop: np.ndarray) -> str:
         cv2.imwrite(str(self.crops_dir / filename), crop)
         return f"/crops/{filename}"

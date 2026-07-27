@@ -164,6 +164,31 @@ class SemanticPersonSearchIndex:
         if new_items:
             self._append_observation_metadata(new_items)
 
+    def clear_source(self, source_name: str) -> None:
+        """Remove prior observations for a source before it is reprocessed."""
+        source_name = str(source_name)
+        stale_ids = [
+            observation_id
+            for observation_id, observation in self.observations.items()
+            if observation.source_name == source_name
+        ]
+        for observation_id in stale_ids:
+            self.observations.pop(observation_id, None)
+            self._indexed_ids.discard(observation_id)
+
+        if self._collection is not None:
+            try:
+                self._collection.delete(where={"source_name": source_name})
+            except Exception:
+                try:
+                    if stale_ids:
+                        self._collection.delete(ids=stale_ids)
+                except Exception:
+                    # The in-memory and metadata stores remain consistent even
+                    # when an optional Chroma backend cannot be updated.
+                    pass
+        self._rewrite_observation_metadata()
+
     def search(
         self,
         query: str,
@@ -348,6 +373,15 @@ class SemanticPersonSearchIndex:
         except Exception:
             return
 
+    def _rewrite_observation_metadata(self) -> None:
+        try:
+            with self.metadata_path.open("w", encoding="utf-8") as file:
+                for item in self.observations.values():
+                    payload = {"observation_id": item.observation_id, **item.metadata()}
+                    file.write(json.dumps(payload, sort_keys=True) + "\n")
+        except Exception:
+            return
+
     def _keyword_search(
         self,
         query: str,
@@ -487,9 +521,7 @@ class SemanticPersonSearchIndex:
         left = self._normalize(left)
         right = self._normalize(right)
         if left.shape != right.shape:
-            size = min(left.size, right.size)
-            left = left[:size]
-            right = right[:size]
+            return 0.0
         return float(np.dot(left, right))
 
     def _normalize(self, vector: np.ndarray) -> np.ndarray:

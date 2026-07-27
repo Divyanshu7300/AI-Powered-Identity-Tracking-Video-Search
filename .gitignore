@@ -48,3 +48,5 @@ Thumbs.db
 # Local Codex/agent state
 .agents/
 .codex/
+
+test/

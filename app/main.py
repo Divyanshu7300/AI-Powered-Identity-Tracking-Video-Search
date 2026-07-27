@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 from pathlib import Path
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI
 from fastapi.responses import PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -99,21 +98,3 @@ def metrics():
         ]
     )
     return "\n".join(lines) + "\n"
-
-
-@app.websocket("/ws/dashboard")
-async def dashboard_ws(websocket: WebSocket):
-    await websocket.accept()
-
-    try:
-        while True:
-            metrics = await asyncio.to_thread(_dashboard_metrics)
-            await websocket.send_json(metrics)
-            await asyncio.sleep(2)
-    except WebSocketDisconnect:
-        return
-
-
-def _dashboard_metrics():
-    with runtime.pipeline_lock:
-        return runtime.pipeline.dashboard_metrics()

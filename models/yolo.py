@@ -2,7 +2,6 @@ import os
 from pathlib import Path
 from typing import Optional
 
-import cv2
 import torch
 from ultralytics import YOLO
 

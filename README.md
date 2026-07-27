@@ -163,10 +163,8 @@ Frontend/
     Next.js API proxy to the FastAPI backend.
 
 tests/
-  test_matcher.py
-  test_tracker.py
-    Unit tests for matching costs, Hungarian assignment, stable IDs,
-    expiry, reactivation, and dashboard metrics.
+  test_persistence.py
+    Regression test ensuring reruns remove stale track memories and embeddings.
 ```
 
 Runtime data folders are intentionally separate from source code:
@@ -379,6 +377,8 @@ The completed job result includes:
 ### 3. Run Tracking on a Local Backend Path
 
 Use this when the video already exists on the backend machine:
+
+For safety, local sources must be within `data/input/` (or `test/` in a local checkout), and output must be within `data/output/`.
 
 ```bash
 curl -X POST http://127.0.0.1:8000/tracking/run \
@@ -748,18 +748,18 @@ Environment variables:
 | Variable | Description |
 | --- | --- |
 | `API_BASE_URL` | Frontend proxy target. Defaults to `http://127.0.0.1:8000`. |
-| `NEXT_PUBLIC_WS_BASE` | Frontend WebSocket target. Defaults to same-origin outside local dev. |
 | `GROQ_API_KEY` | Enables Groq/OpenAI-compatible answer generation. |
 | `GROQ_MODEL` | Chat model name. Defaults to `llama-3.1-8b-instant`. |
 | `GROQ_API_URL` | Chat completions endpoint. |
 | `MOT_REID_CACHE_DIR` | Cache directory for model/library runtime files. Defaults to `/tmp/mot-reid-cache`. |
+| `MOT_REID_MAX_UPLOAD_BYTES` | Maximum upload size in bytes. Defaults to 536870912 (512 MiB). |
 
 ## Testing
 
 Run unit tests from the project root:
 
 ```bash
-.venv/bin/python -m pytest
+python -m pytest
 ```
 
 ## Docker
@@ -772,17 +772,7 @@ docker compose up --build
 
 The backend is exposed on `http://127.0.0.1:8000`, the frontend on `http://localhost:3000`, generated runtime data is mounted at `./data`, and model cache files are stored in a Docker volume.
 
-Current tests cover:
-
-- IoU calculation
-- cosine distance
-- center distance and shape-change costs
-- Hungarian assignment
-- gating unreasonable matches
-- track promotion after `min_hits`
-- stable IDs across small motion
-- track expiry
-- inactive track reactivation by appearance
+Current tests cover persistence cleanup when a processed source is rerun.
 - dashboard metric summaries
 
 These tests do not run the full YOLO or Re-ID model stack. They are intentionally fast and focused on tracking logic.
@@ -837,22 +827,6 @@ For better results:
 - Try `yolov8s.pt`.
 - Enable or provide stronger Re-ID weights.
 
-### Live camera does not start
-
-Browser camera access requires a secure context. Use:
-
-```text
-http://localhost:3000
-```
-
-or:
-
-```text
-http://127.0.0.1:3000
-```
-
-Also check browser camera permissions.
-
 ### First run is slow
 
 The first run may load model weights, initialize Torch, initialize ChromaDB, and warm up inference. Later runs in the same process are usually faster.
@@ -868,8 +842,7 @@ These upgrades are now part of the actual codebase.
 | Persisted image search | `app/services/pipeline.py` | Image search can compare against current in-memory tracks and persisted embeddings. |
 | Re-ID gallery search | `tracking/tracker.py`, `app/services/persistence.py`, `app/services/pipeline.py` | Tracks keep multiple normalized appearance samples, and image search uses the best gallery match. |
 | Track clip export | `app/services/clip_export.py`, `app/routes/tracking.py`, `Frontend/app/page.js` | Track memories can export full-frame visible-duration segments into `data/clips/`. |
-| WebSocket dashboard | `app/main.py`, `Frontend/app/page.js` | Dashboard metrics stream from `/ws/dashboard` every 2 seconds. |
-| Shared runtime pipeline | `app/services/runtime.py` | HTTP routes and WebSocket use the same pipeline object. |
+| Session-scoped pipeline | `app/services/runtime.py`, `Frontend/app/page.js` | Each browser persists and sends a session ID so tracking jobs and searches are isolated. |
 | Non-blocking video runs | `app/services/runtime.py`, `app/routes/tracking.py` | Long video processing uses a fresh pipeline and swaps it into runtime after completion, so dashboard/search reads are not held behind the full run lock. |
 | Persisted semantic observations | `app/services/semantic_search.py` | Semantic observation metadata is restored from `data/semantic_chroma/semantic_observations.jsonl` after restart. |
 | CLIP unavailable fallback | `app/services/semantic_search.py` | When CLIP is unavailable, text search falls back to caption keyword matches and reports the loader error. |

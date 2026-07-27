@@ -33,6 +33,7 @@ class TrackPersistenceStore:
         memories: Iterable[Dict[str, object]],
         track_registry: Dict[int, object],
     ) -> None:
+        current_memories = list(memories)
         with self._connect() as conn:
             conn.execute("pragma foreign_keys = on")
             conn.execute("pragma journal_mode = wal")
@@ -47,7 +48,19 @@ class TrackPersistenceStore:
                 """,
                 (source_name, source_path, output_path),
             )
-            for memory in memories:
+            # A completed rerun is the authoritative view of this source. Remove
+            # memories that disappeared so searches never return stale tracks.
+            current_ids = [str(memory["memory_id"]) for memory in current_memories]
+            if current_ids:
+                placeholders = ", ".join("?" for _ in current_ids)
+                conn.execute(
+                    f"delete from track_memories where source_name = ? and memory_id not in ({placeholders})",
+                    [source_name, *current_ids],
+                )
+            else:
+                conn.execute("delete from track_memories where source_name = ?", (source_name,))
+
+            for memory in current_memories:
                 memory_id = str(memory["memory_id"])
                 track_id = int(memory["track_id"])
                 track = track_registry.get(track_id)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -71,10 +72,14 @@ class MOTReIDPipeline:
         if not source_path.exists():
             raise FileNotFoundError(f"Video not found: {source}")
 
-        source_name = source_path.stem
+        source_name = self._source_name_for_path(source_path)
         if self.tracker.source_name != source_name:
             self.source_name = source_name
             self.tracker = self._new_tracker(source_name)
+        # Reprocessing a source replaces its searchable observations instead of
+        # mixing old detections with the current run.
+        self.evidence_store.clear_source(source_name)
+        self.semantic_index.clear_source(source_name)
 
         cap = cv2.VideoCapture(str(source_path))
         if not cap.isOpened():
@@ -335,7 +340,10 @@ class MOTReIDPipeline:
             for memory in self.persistence.list_memories()
         }
         for memory in runtime_memories:
-            memories_by_id[str(memory["memory_id"])] = memory
+            memory_id = str(memory["memory_id"])
+            # Runtime data is fresher for tracking fields, while persisted data
+            # contains source/output paths and previously exported clip details.
+            memories_by_id[memory_id] = {**memories_by_id.get(memory_id, {}), **memory}
         memories = sorted(
             memories_by_id.values(),
             key=lambda item: (str(item.get("source_name", "")), int(item.get("track_id", 0))),
@@ -378,18 +386,6 @@ class MOTReIDPipeline:
     def dashboard_metrics(self) -> Dict[str, object]:
         memories = self.list_track_memories()
         sources = {memory["source_name"] for memory in memories}
-        evidence_gallery = [
-            {
-                "memory_id": memory.get("memory_id"),
-                "track_id": memory.get("track_id"),
-                "evidence_url": memory.get("evidence_url"),
-                "best_crop_url": memory.get("best_crop_url"),
-                "crop_url": memory.get("crop_url"),
-            }
-            for memory in memories
-            if memory.get("evidence_url") or memory.get("best_crop_url") or memory.get("crop_url")
-        ]
-
         return {
             "overview": {
                 "indexed_track_memories": len(memories),
@@ -405,7 +401,6 @@ class MOTReIDPipeline:
             "reid_status": self.reid_status(),
             "image_index_status": self.reid_index.status(),
             "model_cache": model_cache.status(),
-            "evidence_gallery": evidence_gallery[-24:],
         }
 
     def reid_status(self) -> Dict[str, object]:
@@ -462,8 +457,32 @@ class MOTReIDPipeline:
     def _bbox_area(bbox) -> float:
         if not bbox:
             return 0.0
-        x1, y1, x2, y2 = map(float, bbox)
+        try:
+            x1, y1, x2, y2 = map(float, bbox)
+        except (TypeError, ValueError):
+            return 0.0
         return max(0.0, x2 - x1) * max(0.0, y2 - y1)
+
+    def _filter_detections(self, detections: List[Dict[str, object]]) -> List[Dict[str, object]]:
+        """Keep well-formed person detections before crops are generated.
+
+        The detector is responsible for confidence and person-shape filtering.
+        This second, lightweight check prevents malformed boxes from reaching the
+        cropper and tracker when a detector backend returns unexpected data.
+        """
+        filtered: List[Dict[str, object]] = []
+        for detection in detections or []:
+            bbox = detection.get("bbox")
+            if self._bbox_area(bbox) <= 0:
+                continue
+            try:
+                confidence = float(detection.get("confidence", 0.0))
+            except (TypeError, ValueError):
+                continue
+            if not np.isfinite(confidence) or confidence < self.config.conf_threshold:
+                continue
+            filtered.append(detection)
+        return filtered
 
     def _new_tracker(self, source_name: str) -> MultiObjectTracker:
         return MultiObjectTracker(
@@ -476,6 +495,13 @@ class MOTReIDPipeline:
             timeline_limit=self.config.tracker_timeline_limit,
             source_name=source_name,
         )
+
+    @staticmethod
+    def _source_name_for_path(source_path: Path) -> str:
+        """Create a stable, collision-resistant ID for a local video path."""
+        resolved = str(source_path.resolve())
+        digest = hashlib.sha256(resolved.encode("utf-8")).hexdigest()[:12]
+        return f"{source_path.stem}-{digest}"
 
     def _runtime_track_for_memory(self, memory: Dict[str, object]):
         memory_source = str(memory.get("source_name", ""))
@@ -519,44 +545,6 @@ class MOTReIDPipeline:
             self.config.reid_weights,
             self.config.reid_model_name,
         )
-
-    @staticmethod
-    def _cosine(left: np.ndarray, right: np.ndarray) -> float:
-        left = np.asarray(left, dtype=np.float32)
-        right = np.asarray(right, dtype=np.float32)
-        if left.shape != right.shape:
-            return 0.0
-        denom = float(np.linalg.norm(left) * np.linalg.norm(right))
-        if denom <= 1e-9:
-            return 0.0
-        return float(np.dot(left, right) / denom)
-
-    @classmethod
-    def _best_cosine(cls, query: np.ndarray, candidates: np.ndarray) -> float:
-        candidate_array = np.asarray(candidates, dtype=np.float32)
-        if candidate_array.ndim == 1:
-            return cls._cosine(query, candidate_array)
-        if candidate_array.size == 0:
-            return 0.0
-        compatible = [
-            candidate
-            for candidate in candidate_array
-            if np.asarray(candidate).reshape(-1).shape == np.asarray(query).reshape(-1).shape
-        ]
-        if not compatible:
-            return 0.0
-        return max(cls._cosine(query, candidate) for candidate in compatible)
-
-    @staticmethod
-    def _embedding_dimensions_match(query: np.ndarray, candidates: np.ndarray) -> bool:
-        query_size = int(np.asarray(query).reshape(-1).size)
-        candidate_array = np.asarray(candidates)
-        if candidate_array.ndim == 1:
-            return int(candidate_array.reshape(-1).size) == query_size
-        if candidate_array.ndim == 2:
-            return int(candidate_array.shape[1]) == query_size
-        return False
-
 
 def _open_video_writer(output_path: str, fps: float, size: tuple[int, int]) -> cv2.VideoWriter:
     for codec in ("avc1", "mp4v"):

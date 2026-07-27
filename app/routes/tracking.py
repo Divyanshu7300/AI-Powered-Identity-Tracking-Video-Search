@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import shutil
+import os
 import uuid
 from dataclasses import asdict
 from pathlib import Path
@@ -14,6 +14,10 @@ from app.services.pipeline import MOTReIDPipeline, PipelineConfig
 
 
 router = APIRouter(prefix="/tracking", tags=["tracking"])
+ALLOWED_VIDEO_SUFFIXES = {".mp4", ".avi", ".mov", ".mkv", ".webm"}
+MAX_UPLOAD_BYTES = int(os.getenv("MOT_REID_MAX_UPLOAD_BYTES", str(512 * 1024 * 1024)))
+LOCAL_VIDEO_ROOTS = (Path("data/input").resolve(), Path("test").resolve())
+LOCAL_OUTPUT_ROOT = Path("data/output").resolve()
 
 
 class TrackRequest(BaseModel):
@@ -44,18 +48,23 @@ class ModelWarmupRequest(BaseModel):
 @router.post("/run")
 def run_tracking(payload: TrackRequest, request: Request):
     session_id = _session_id(request)
-    source_path = Path(payload.source_path)
+    source_path = Path(payload.source_path).resolve()
     if not source_path.exists():
         raise HTTPException(status_code=404, detail=f"Video not found: {payload.source_path}")
+    if source_path.suffix.lower() not in ALLOWED_VIDEO_SUFFIXES or not _is_allowed_local_video(source_path):
+        raise HTTPException(status_code=400, detail="Source video must be inside data/input or test.")
+    output_path = Path(payload.output_path).resolve()
+    if not _is_within(output_path, LOCAL_OUTPUT_ROOT):
+        raise HTTPException(status_code=400, detail="Output path must be inside data/output.")
 
     config = runtime.snapshot_config(session_id)
     config.conf_threshold = payload.conf_threshold
     config.match_threshold = payload.match_threshold
-    return _submit_video_job(config, source_path, Path(payload.output_path), session_id=session_id)
+    return _submit_video_job(config, source_path, output_path, session_id=session_id)
 
 
 @router.post("/upload")
-def upload_video(
+async def upload_video(
     request: Request,
     file: UploadFile = File(...),
     detector_model: Optional[str] = Form(None),
@@ -68,11 +77,26 @@ def upload_video(
     outputs_dir.mkdir(parents=True, exist_ok=True)
 
     upload_id = uuid.uuid4().hex
-    input_path = uploads_dir / f"{upload_id}{Path(file.filename).suffix or '.mp4'}"
+    suffix = Path(file.filename or "").suffix.lower()
+    if suffix not in ALLOWED_VIDEO_SUFFIXES:
+        raise HTTPException(status_code=400, detail="Upload a supported video file (mp4, avi, mov, mkv, or webm).")
+    if file.content_type and not file.content_type.startswith("video/"):
+        raise HTTPException(status_code=400, detail="Uploaded file must have a video content type.")
+    input_path = uploads_dir / f"{upload_id}{suffix}"
     output_path = outputs_dir / f"{upload_id}_tracked.mp4"
-
-    with input_path.open("wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
+    bytes_written = 0
+    try:
+        with input_path.open("wb") as buffer:
+            while chunk := await file.read(1024 * 1024):
+                bytes_written += len(chunk)
+                if bytes_written > MAX_UPLOAD_BYTES:
+                    raise HTTPException(status_code=413, detail="Video exceeds the configured upload size limit.")
+                buffer.write(chunk)
+    except Exception:
+        input_path.unlink(missing_ok=True)
+        raise
+    finally:
+        await file.close()
 
     config = runtime.snapshot_config(session_id)
     if detector_model:
@@ -296,3 +320,15 @@ def _ensure_job_session(job: dict, session_id: str) -> None:
     job_session_id = str((job.get("metadata") or {}).get("session_id") or "default")
     if job_session_id != session_id:
         raise HTTPException(status_code=404, detail="Job not found in this session.")
+
+
+def _is_within(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def _is_allowed_local_video(source_path: Path) -> bool:
+    return any(_is_within(source_path, root) for root in LOCAL_VIDEO_ROOTS)

@@ -41,6 +41,23 @@ export default function Home() {
   const [error, setError] = useState("");
   const fileInputRef = useRef(null);
   const imageInputRef = useRef(null);
+  const sessionIdRef = useRef("");
+
+  function getSessionId() {
+    if (sessionIdRef.current) return sessionIdRef.current;
+    const storageKey = "mot-reid-session-id";
+    const stored = window.localStorage.getItem(storageKey);
+    const nextId = stored || crypto.randomUUID();
+    if (!stored) window.localStorage.setItem(storageKey, nextId);
+    sessionIdRef.current = nextId;
+    return nextId;
+  }
+
+  function apiFetch(path, options = {}) {
+    const headers = new Headers(options.headers || {});
+    headers.set("x-session-id", getSessionId());
+    return fetch(path, { ...options, headers });
+  }
 
   const overview = dashboard?.overview || {};
   const semanticStatus = dashboard?.semantic_status || {};
@@ -55,10 +72,10 @@ export default function Home() {
   async function loadDashboard() {
     try {
       const [healthResponse, dashboardResponse, tracksResponse, jobsResponse] = await Promise.all([
-        fetch("/api/health", { cache: "no-store" }),
-        fetch("/api/tracking/analytics/dashboard", { cache: "no-store" }),
-        fetch("/api/tracking/analytics/tracks", { cache: "no-store" }),
-        fetch("/api/tracking/jobs", { cache: "no-store" }),
+        apiFetch("/api/health", { cache: "no-store" }),
+        apiFetch("/api/tracking/analytics/dashboard", { cache: "no-store" }),
+        apiFetch("/api/tracking/analytics/tracks", { cache: "no-store" }),
+        apiFetch("/api/tracking/jobs", { cache: "no-store" }),
       ]);
       setHealth(healthResponse.ok ? "online" : "offline");
       if (dashboardResponse.ok) setDashboard(await dashboardResponse.json());
@@ -88,7 +105,7 @@ export default function Home() {
 
     async function pollJob() {
       try {
-        const response = await fetch(`/api/tracking/jobs/${activeJobId}`, { cache: "no-store" });
+        const response = await apiFetch(`/api/tracking/jobs/${activeJobId}`, { cache: "no-store" });
         const payload = await readJson(response);
         if (!response.ok) throw new Error(payload.detail || payload.message || "Unable to load job.");
         if (cancelled) return;
@@ -139,7 +156,7 @@ export default function Home() {
     formData.append("detector_model", detectorModel);
     formData.append("frame_stride", String(frameStride));
     try {
-      const response = await fetch("/api/tracking/upload", {
+      const response = await apiFetch("/api/tracking/upload", {
         method: "POST",
         body: formData,
       });
@@ -160,7 +177,7 @@ export default function Home() {
     setBusy("text");
     setError("");
     try {
-      const response = await fetch("/api/tracking/search/text", {
+      const response = await apiFetch("/api/tracking/search/text", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ query: textQuery, top_k: 8 }),
@@ -187,7 +204,7 @@ export default function Home() {
     const formData = new FormData();
     formData.append("file", queryFile);
     try {
-      const response = await fetch("/api/tracking/search?top_k=8", {
+      const response = await apiFetch("/api/tracking/search?top_k=8", {
         method: "POST",
         body: formData,
       });
@@ -206,7 +223,7 @@ export default function Home() {
     setBusy(`clip:${memoryId}`);
     setError("");
     try {
-      const response = await fetch(`/api/tracking/clips/${encodeURIComponent(memoryId)}`, {
+      const response = await apiFetch(`/api/tracking/clips/${encodeURIComponent(memoryId)}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ padding_frames: 0 }),
@@ -225,7 +242,7 @@ export default function Home() {
   async function updateJob(jobId, action) {
     setError("");
     try {
-      const response = await fetch(`/api/tracking/jobs/${jobId}/${action}`, { method: "POST" });
+      const response = await apiFetch(`/api/tracking/jobs/${jobId}/${action}`, { method: "POST" });
       const payload = await readJson(response);
       if (!response.ok) throw new Error(payload.detail || payload.message || `Job ${action} failed.`);
       setJobs((current) => [payload, ...current.filter((job) => job.job_id !== payload.job_id)]);
@@ -245,7 +262,7 @@ export default function Home() {
   async function deleteJob(jobId) {
     setError("");
     try {
-      const response = await fetch(`/api/tracking/jobs/${jobId}`, { method: "DELETE" });
+      const response = await apiFetch(`/api/tracking/jobs/${jobId}`, { method: "DELETE" });
       const payload = await readJson(response);
       if (!response.ok) throw new Error(payload.detail || payload.message || "Delete job failed.");
       setJobs((current) => current.filter((job) => job.job_id !== jobId));
