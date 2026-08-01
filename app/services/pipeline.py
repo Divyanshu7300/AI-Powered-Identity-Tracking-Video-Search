@@ -134,48 +134,64 @@ class MOTReIDPipeline:
 
         report_progress("opening", "Video opened. Preparing output writer.", force=True)
 
+        batch_size = 8
         try:
             while True:
-                ok, frame = cap.read()
-                if not ok or frame is None:
+                batch_data = []
+                while len(batch_data) < batch_size:
+                    ok, frame = cap.read()
+                    if not ok or frame is None:
+                        break
+                    frames_processed += 1
+                    if (frames_processed - 1) % max(1, self.config.frame_stride) != 0:
+                        report_progress("processing", "Skipping frame according to stride.")
+                        continue
+
+                    if frame.shape[:2] != (height, width):
+                        frame = cv2.resize(frame, (width, height))
+
+                    sampled_frames_processed += 1
+                    timestamp_seconds = frames_processed / max(fps, 1.0)
+                    batch_data.append(
+                        {
+                            "frame": frame,
+                            "frame_index": frames_processed,
+                            "sampled_frame_index": sampled_frames_processed,
+                            "timestamp_seconds": timestamp_seconds,
+                        }
+                    )
+
+                if not batch_data:
                     break
-                frames_processed += 1
-                if (frames_processed - 1) % max(1, self.config.frame_stride) != 0:
-                    report_progress("processing", "Skipping frame according to stride.")
-                    continue
 
-                if frame.shape[:2] != (height, width):
-                    frame = cv2.resize(frame, (width, height))
-
-                timestamp_seconds = frames_processed / max(fps, 1.0)
-                result = self.process_frame(
-                    frame,
+                batch_results = self.process_frames_batch(
+                    batch_data,
                     tracker=self.tracker,
-                    frame_index=frames_processed,
-                    sampled_frame_index=sampled_frames_processed + 1,
-                    timestamp_seconds=timestamp_seconds,
                     update_memory=True,
                 )
-                tracks = result["tracks"]
-                sampled_frames_processed += 1
-                if tracks:
-                    frames_with_tracks += 1
-                    max_track_id = max(max_track_id, max(int(track["track_id"]) for track in tracks))
-                report_progress("processing", "Processing frames.")
 
-                rendered = [
-                    type(
-                        "RenderedTrack",
-                        (),
-                        {
-                            "bbox": track["bbox"],
-                            "track_id": track["track_id"],
-                            "confidence": track["confidence"],
-                        },
-                    )()
-                    for track in tracks
-                ]
-                writer.write(draw_tracked_objects(frame, rendered, fps=result.get("fps")))
+                for item, res in zip(batch_data, batch_results):
+                    frame = item["frame"]
+                    tracks = res["tracks"]
+                    if tracks:
+                        frames_with_tracks += 1
+                        max_track_id = max(max_track_id, max(int(track["track_id"]) for track in tracks))
+
+                    rendered = [
+                        type(
+                            "RenderedTrack",
+                            (),
+                            {
+                                "bbox": track["bbox"],
+                                "track_id": track["track_id"],
+                                "confidence": track["confidence"],
+                            },
+                        )()
+                        for track in tracks
+                    ]
+                    writer.write(draw_tracked_objects(frame, rendered, fps=res.get("fps")))
+
+                report_progress("processing", "Processing frames in batch.")
         finally:
             cap.release()
             writer.release()
@@ -211,6 +227,106 @@ class MOTReIDPipeline:
             "dashboard_metrics": self.dashboard_metrics(),
         }
 
+    def process_frames_batch(
+        self,
+        frames_data: List[Dict[str, object]],
+        tracker: MultiObjectTracker | None = None,
+        update_memory: bool = True,
+    ) -> List[Dict[str, object]]:
+        if not frames_data:
+            return []
+        tracker = tracker or self.tracker
+        self._ensure_models()
+
+        frames = [item["frame"] for item in frames_data]
+        with self.detector_lock:
+            self.detector.conf_threshold = self.config.conf_threshold
+            if hasattr(self.detector, "detect_person_batch"):
+                batch_detections = self.detector.detect_person_batch(frames)
+            else:
+                batch_detections = [self.detector.detect_person(frame) for frame in frames]
+
+        all_crops = []
+        crop_to_frame_map = []
+        filtered_batch_detections = []
+
+        for frame_idx, (item, detections) in enumerate(zip(frames_data, batch_detections)):
+            frame = item["frame"]
+            filtered_dets = self._filter_detections(detections)
+            filtered_batch_detections.append(filtered_dets)
+            for det_idx, det in enumerate(filtered_dets):
+                crop = crop_bbox(frame, det["bbox"])
+                if crop is not None:
+                    all_crops.append(crop)
+                    crop_to_frame_map.append((frame_idx, det_idx))
+
+        if all_crops:
+            with self.reid_lock:
+                batch_embeddings = self.reid_encoder.encode_crops(all_crops)
+            embeddings_by_frame_det = {}
+            for crop_idx in range(len(batch_embeddings.valid_indices)):
+                valid_orig_idx = batch_embeddings.valid_indices[crop_idx]
+                f_idx, d_idx = crop_to_frame_map[valid_orig_idx]
+                emb = batch_embeddings.embeddings[crop_idx]
+                embeddings_by_frame_det[(f_idx, d_idx)] = emb
+        else:
+            embeddings_by_frame_det = {}
+
+        results = []
+        for frame_idx, item in enumerate(frames_data):
+            frame = item["frame"]
+            f_num = item["frame_index"]
+            sf_num = item["sampled_frame_index"]
+            ts = item["timestamp_seconds"]
+            dets = filtered_batch_detections[frame_idx]
+
+            valid_dets = []
+            emb_list = []
+            for d_idx, det in enumerate(dets):
+                if (frame_idx, d_idx) in embeddings_by_frame_det:
+                    valid_dets.append(det)
+                    emb_list.append(embeddings_by_frame_det[(frame_idx, d_idx)])
+
+            if emb_list:
+                embeddings = np.vstack(emb_list)
+            else:
+                embeddings = np.empty((0, getattr(self.reid_encoder, "embedding_dim", 512)), dtype=np.float32)
+
+            visible_tracks = tracker.update(
+                valid_dets,
+                embeddings,
+                frame_index=f_num,
+                timestamp_seconds=ts,
+            )
+
+            if update_memory and f_num is not None and f_num % max(1, self.config.memory_interval) == 0:
+                self.memory_engine.update_tracks(frame, visible_tracks, f_num, ts)
+
+            track_dicts = [track.as_dict() for track in visible_tracks]
+            semantic_index_frame = sf_num if sf_num is not None else f_num
+            if semantic_index_frame is not None and semantic_index_frame % max(1, self.config.semantic_interval) == 0:
+                self.semantic_index.add_track_observations(
+                    frame,
+                    track_dicts,
+                    source_name=tracker.source_name,
+                    frame_index=f_num,
+                    timestamp_seconds=ts,
+                )
+
+            results.append(
+                {
+                    "frame_index": f_num,
+                    "sampled_frame_index": sf_num,
+                    "timestamp_seconds": ts,
+                    "detections": valid_dets,
+                    "tracks": track_dicts,
+                    "frames_processed": tracker.frame_index,
+                    "dashboard_metrics": tracker.dashboard_metrics(),
+                }
+            )
+
+        return results
+
     def process_frame(
         self,
         frame: np.ndarray,
@@ -220,64 +336,20 @@ class MOTReIDPipeline:
         timestamp_seconds: float | None = None,
         update_memory: bool = True,
     ) -> Dict[str, object]:
-        started_at = time.perf_counter()
-        tracker = tracker or self.tracker
-        self._ensure_models()
-
-        with self.detector_lock:
-            self.detector.conf_threshold = self.config.conf_threshold
-            detections = self.detector.detect_person(frame)
-        detections = self._filter_detections(detections)
-        crops = [crop_bbox(frame, detection["bbox"]) for detection in detections]
-        valid_detections = []
-        valid_crops = []
-        for detection, crop in zip(detections, crops):
-            if crop is None:
-                continue
-            valid_detections.append(detection)
-            valid_crops.append(crop)
-
-        if valid_crops:
-            with self.reid_lock:
-                batch = self.reid_encoder.encode_crops(valid_crops)
-            embeddings = batch.embeddings
-            valid_detections = [valid_detections[index] for index in batch.valid_indices]
-        else:
-            embeddings = np.empty((0, getattr(self.reid_encoder, "embedding_dim", 512)), dtype=np.float32)
-            valid_detections = []
-
-        visible_tracks = tracker.update(
-            valid_detections,
-            embeddings,
-            frame_index=frame_index,
-            timestamp_seconds=timestamp_seconds,
+        res = self.process_frames_batch(
+            [
+                {
+                    "frame": frame,
+                    "frame_index": frame_index,
+                    "sampled_frame_index": sampled_frame_index,
+                    "timestamp_seconds": timestamp_seconds,
+                }
+            ],
+            tracker=tracker,
+            update_memory=update_memory,
         )
+        return res[0] if res else {}
 
-        if update_memory and frame_index is not None and frame_index % max(1, self.config.memory_interval) == 0:
-            self.memory_engine.update_tracks(frame, visible_tracks, frame_index, timestamp_seconds)
-
-        track_dicts = [track.as_dict() for track in visible_tracks]
-        semantic_index_frame = sampled_frame_index if sampled_frame_index is not None else frame_index
-        if semantic_index_frame is not None and semantic_index_frame % max(1, self.config.semantic_interval) == 0:
-            self.semantic_index.add_track_observations(
-                frame,
-                track_dicts,
-                source_name=tracker.source_name,
-                frame_index=frame_index,
-                timestamp_seconds=timestamp_seconds,
-            )
-
-        elapsed = max(time.perf_counter() - started_at, 1e-9)
-        return {
-            "frame_index": frame_index,
-            "sampled_frame_index": sampled_frame_index,
-            "timestamp_seconds": timestamp_seconds,
-            "detections": valid_detections,
-            "tracks": track_dicts,
-            "fps": round(1.0 / elapsed, 2),
-            "frames_processed": tracker.frame_index,
-            "dashboard_metrics": tracker.dashboard_metrics(),
-        }
 
     def search_person(self, image_bytes: bytes, top_k: int = 5) -> Dict[str, object]:
         self._ensure_reid()

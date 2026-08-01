@@ -30,11 +30,23 @@ TEXT_SYNONYMS = {
     "middle": "center",
     "tshirt": "shirt",
     "tee": "shirt",
+    "top": "shirt",
+    "jacket": "shirt",
+    "hoodie": "shirt",
+    "coat": "shirt",
     "pants": "trousers",
+    "pant": "trousers",
+    "jeans": "trousers",
+    "jean": "trousers",
+    "shorts": "trousers",
     "grey": "gray",
     "dark": "black",
     "light": "white",
+    "backpack": "bag",
+    "handbag": "bag",
+    "purse": "bag",
 }
+
 
 COLOR_WORDS = set(COLORS)
 LOCATION_WORDS = {"left", "right", "center", "top", "bottom", "middle"}
@@ -484,12 +496,26 @@ class SemanticPersonSearchIndex:
         return number if math.isfinite(number) and number >= 0 else None
 
     def _evidence_text(self, crop: np.ndarray, bbox: List[int], frame_shape) -> str:
-        return f"person wearing {self._dominant_color(crop)} clothing near {self._location(bbox, frame_shape)}"
+        upper_color, lower_color = self._upper_lower_colors(crop)
+        location_str = self._location(bbox, frame_shape)
+        return f"person wearing {upper_color} shirt and {lower_color} trousers near {location_str}"
+
+    def _upper_lower_colors(self, crop: np.ndarray) -> tuple[str, str]:
+        if crop is None or crop.size == 0:
+            return "gray", "gray"
+        h = crop.shape[0]
+        split = max(1, h // 2)
+        upper_half = crop[:split, :]
+        lower_half = crop[split:, :]
+        return self._dominant_color(upper_half), self._dominant_color(lower_half)
 
     def _dominant_color(self, crop: np.ndarray) -> str:
-        resized = cv2.resize(crop, (32, 64))
+        if crop is None or crop.size == 0:
+            return "gray"
+        resized = cv2.resize(crop, (32, 32))
         mean_rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB).reshape(-1, 3).mean(axis=0)
         return min(COLORS, key=lambda name: float(np.linalg.norm(mean_rgb - COLORS[name])))
+
 
     def _location(self, bbox: List[int], frame_shape) -> str:
         x1, y1, x2, y2 = map(float, bbox)

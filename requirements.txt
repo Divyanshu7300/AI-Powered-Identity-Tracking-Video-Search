@@ -3,7 +3,7 @@ opencv-python-headless
 torch>=2.0.0
 torchvision>=0.15.0
 torchreid>=0.2.5
-gdown>=6.0.0
+gdown>=5.2.2
 numpy>=1.24.0
 matplotlib>=3.7.0
 scipy>=1.10.0
@@ -17,3 +17,5 @@ pytest>=8.0.0
 transformers>=4.40.0,<5.0.0
 chromadb>=0.5.0
 requests>=2.30.0
+tensorboard>=2.14.0
+

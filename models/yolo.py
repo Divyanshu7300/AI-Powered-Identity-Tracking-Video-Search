@@ -6,27 +6,23 @@ import torch
 from ultralytics import YOLO
 
 
-cache_root = Path(
-    os.getenv(
-        "MOT_REID_CACHE_DIR",
-        "/tmp/mot-reid-cache",
-    )
-)
+cache_dir_env = os.getenv("MOT_REID_CACHE_DIR")
+if cache_dir_env:
+    cache_root = Path(cache_dir_env)
+else:
+    cache_root = Path("data/cache").resolve()
 
-cache_root.mkdir(
-    parents=True,
-    exist_ok=True,
-)
+try:
+    cache_root.mkdir(parents=True, exist_ok=True)
+    matplotlib_dir = cache_root / "matplotlib"
+    xdg_dir = cache_root / "xdg"
+    matplotlib_dir.mkdir(parents=True, exist_ok=True)
+    xdg_dir.mkdir(parents=True, exist_ok=True)
+    os.environ.setdefault("MPLCONFIGDIR", str(matplotlib_dir))
+    os.environ.setdefault("XDG_CACHE_HOME", str(xdg_dir))
+except Exception:
+    pass
 
-os.environ.setdefault(
-    "MPLCONFIGDIR",
-    str(cache_root / "matplotlib"),
-)
-
-os.environ.setdefault(
-    "XDG_CACHE_HOME",
-    str(cache_root / "xdg"),
-)
 
 
 class YOLODetector:
@@ -102,14 +98,15 @@ class YOLODetector:
         return 0.18 <= aspect_ratio <= 1.35
 
     def detect_person(self, image):
+        res = self.detect_person_batch([image])
+        return res[0] if res else []
 
-        if image is None:
-            raise ValueError("Image is None")
+    def detect_person_batch(self, images):
+        if not images:
+            return []
 
-        height, width = image.shape[:2]
-
-        results = self.model(
-            image,
+        batch_results = self.model(
+            images,
             imgsz=self.imgsz,
             conf=self.conf_threshold,
             iou=self.nms_iou_threshold,
@@ -118,42 +115,35 @@ class YOLODetector:
             verbose=False,
             half=self.use_fp16,
             device=self.device,
-        )[0]
-        
-        persons = []
-        boxes = results.boxes
-        if boxes is None:
-            return persons
-        for box in boxes:
-            x1, y1, x2, y2 = map(
-                int,
-                box.xyxy[0],
-            )
+        )
 
-            # clamp bbox
-            x1 = max(0, min(width - 1, x1))
-            y1 = max(0, min(height - 1, y1))
-            x2 = max(0, min(width - 1, x2))
-            y2 = max(0, min(height - 1, y2))
-
-            if x2 <= x1 or y2 <= y1:
+        all_persons = []
+        for image, results in zip(images, batch_results):
+            if image is None:
+                all_persons.append([])
                 continue
+            height, width = image.shape[:2]
+            persons = []
+            boxes = results.boxes
+            if boxes is not None:
+                for box in boxes:
+                    x1, y1, x2, y2 = map(int, box.xyxy[0])
+                    x1 = max(0, min(width - 1, x1))
+                    y1 = max(0, min(height - 1, y1))
+                    x2 = max(0, min(width - 1, x2))
+                    y2 = max(0, min(height - 1, y2))
+                    if x2 <= x1 or y2 <= y1:
+                        continue
+                    bbox = (x1, y1, x2, y2)
+                    if not self._is_valid_person_box(bbox, width, height):
+                        continue
+                    persons.append(
+                        {
+                            "bbox": bbox,
+                            "confidence": float(box.conf[0]),
+                            "class_id": 0,
+                        }
+                    )
+            all_persons.append(persons)
+        return all_persons
 
-            bbox = (x1, y1, x2, y2)
-
-            if not self._is_valid_person_box(
-                bbox,
-                width,
-                height,
-            ):
-                continue
-
-            persons.append(
-                {
-                    "bbox": bbox,
-                    "confidence": float(box.conf[0]),
-                    "class_id": 0,
-                }
-            )
-
-        return persons

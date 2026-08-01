@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List, Optional
@@ -9,6 +10,8 @@ import numpy as np
 import torch
 from torch import nn
 from torchvision import transforms
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -49,11 +52,14 @@ class ReIDEncoder(nn.Module):
             self.embedding_dim = int(
                 getattr(self.model, "feature_dim", 512)
             )
+            logger.info("TorchReID model %s built successfully (embedding_dim=%d)", model_name, self.embedding_dim)
         except Exception as exc:
             self.model = None
             self.backend = "color_histogram"
             self.fallback_error = str(exc)
             self.embedding_dim = 48
+            logger.warning("TorchReID model build failed (%s). Falling back to color_histogram: %s", model_name, exc)
+
 
         self.transform = transforms.Compose(
             [
@@ -250,19 +256,3 @@ class ReIDEncoder(nn.Module):
         norm = float(np.linalg.norm(vector))
         return vector / norm if norm > 0 else vector
 
-    @classmethod
-    def from_checkpoint(
-        cls,
-        checkpoint_path: str,
-        device: Optional[str] = None,
-    ) -> "ReIDEncoder":
-
-        if not Path(checkpoint_path).exists():
-            raise FileNotFoundError(
-                f"Checkpoint not found: {checkpoint_path}"
-            )
-
-        return cls(
-            device=device,
-            weights_path=checkpoint_path,
-        )

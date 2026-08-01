@@ -167,11 +167,14 @@ def retry_job(job_id: str, request: Request):
     metadata = job.get("metadata") or {}
     config_data = metadata.get("config") or {}
     config = PipelineConfig(**config_data)
-    source_path = Path(str(job["input_path"]))
-    if not source_path.exists():
-        raise HTTPException(status_code=404, detail=f"Video not found: {source_path}")
+    source_path = Path(str(job["input_path"])).resolve()
+    if not source_path.exists() or not (source_path.suffix.lower() in ALLOWED_VIDEO_SUFFIXES and _is_allowed_local_video(source_path)):
+        raise HTTPException(status_code=400, detail=f"Invalid or unauthorized source video path: {source_path}")
 
-    output_path = Path(str(job["output_path"]))
+    output_path = Path(str(job["output_path"])).resolve()
+    if not _is_within(output_path, LOCAL_OUTPUT_ROOT):
+        raise HTTPException(status_code=400, detail="Output path must be inside data/output.")
+
     return _submit_video_job(
         config,
         source_path,
@@ -195,19 +198,17 @@ def delete_job(job_id: str, request: Request):
 
 @router.post("/search")
 def search_person(request: Request, file: UploadFile = File(...), top_k: int = 5):
-    with runtime.pipeline_lock:
-        return runtime.get_pipeline(_session_id(request)).search_person(image_bytes=file.file.read(), top_k=top_k)
+    return runtime.get_pipeline(_session_id(request)).search_person(image_bytes=file.file.read(), top_k=top_k)
 
 
 @router.post("/search/text")
 def search_person_by_text(payload: TextSearchRequest, request: Request):
-    with runtime.pipeline_lock:
-        return runtime.get_pipeline(_session_id(request)).search_person_by_text(
-            query=payload.query,
-            top_k=payload.top_k,
-            start_time_seconds=payload.start_time_seconds,
-            end_time_seconds=payload.end_time_seconds,
-        )
+    return runtime.get_pipeline(_session_id(request)).search_person_by_text(
+        query=payload.query,
+        top_k=payload.top_k,
+        start_time_seconds=payload.start_time_seconds,
+        end_time_seconds=payload.end_time_seconds,
+    )
 
 
 @router.get("/tracks")
@@ -228,23 +229,19 @@ def analytics_tracks(request: Request):
 @router.get("/analytics/tracks/{memory_id:path}")
 def analytics_track(memory_id: str, request: Request):
     try:
-        with runtime.pipeline_lock:
-            return runtime.get_pipeline(_session_id(request)).get_track_memory(memory_id)
+        return runtime.get_pipeline(_session_id(request)).get_track_memory(memory_id)
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Track memory not found: {memory_id}")
 
 
-# Live camera/session endpoints removed per project configuration
-
-
 @router.post("/clips/{memory_id:path}")
+
 def export_track_clip(memory_id: str, payload: ClipExportRequest, request: Request):
     try:
-        with runtime.pipeline_lock:
-            return runtime.get_pipeline(_session_id(request)).export_track_clip(
-                memory_id=memory_id,
-                padding_frames=payload.padding_frames,
-            )
+        return runtime.get_pipeline(_session_id(request)).export_track_clip(
+            memory_id=memory_id,
+            padding_frames=payload.padding_frames,
+        )
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Track memory not found: {memory_id}")
     except FileNotFoundError as exc:
@@ -266,15 +263,14 @@ def health(request: Request):
 
 
 def _list_track_memories(session_id: str):
-    with runtime.pipeline_lock:
-        return runtime.get_pipeline(session_id).list_track_memories()
+    return runtime.get_pipeline(session_id).list_track_memories()
 
 
 def _dashboard_metrics(session_id: str):
-    with runtime.pipeline_lock:
-        metrics = runtime.get_pipeline(session_id).dashboard_metrics()
-        metrics["session_id"] = session_id
-        return metrics
+    metrics = runtime.get_pipeline(session_id).dashboard_metrics()
+    metrics["session_id"] = session_id
+    return metrics
+
 
 
 def _submit_video_job(
