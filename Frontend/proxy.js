@@ -4,7 +4,7 @@ import { NextResponse } from "next/server";
 const isDashboard = createRouteMatcher(["/"]);
 const hasClerk = Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY);
 
-export default async function middleware(request, event) {
+export default async function proxy(request, event) {
   if (!hasClerk) {
     if (isDashboard(request)) {
       const token = request.cookies.get("mot_reid_access_token")?.value;

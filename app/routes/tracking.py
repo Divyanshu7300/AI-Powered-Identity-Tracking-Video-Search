@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Optional
 from threading import Lock
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field
 
 from app.services import model_cache, runtime
@@ -306,12 +306,16 @@ def delete_track_memory_endpoint(memory_id: str, request: Request):
 
 
 @router.post("/clips/{memory_id:path}")
-
-def export_track_clip(memory_id: str, payload: ClipExportRequest, request: Request):
+def export_track_clip(
+    memory_id: str,
+    payload: Optional[ClipExportRequest] = Body(default_factory=ClipExportRequest),
+    request: Request = None,
+):
     try:
+        padding_frames = payload.padding_frames if payload else 15
         return runtime.get_pipeline(_session_id(request)).export_track_clip(
             memory_id=memory_id,
-            padding_frames=payload.padding_frames,
+            padding_frames=padding_frames,
         )
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Track memory not found: {memory_id}")
@@ -369,11 +373,12 @@ def _submit_video_job(
     uploaded_filename: str | None = None,
     output_url: str | None = None,
 ):
+    source_display_name = uploaded_filename or source_path.stem
     def runner(progress_callback):
         source_label = Path(uploaded_filename or source_path.name).stem
         next_pipeline = MOTReIDPipeline(
             config=config,
-            source_name=source_path.stem,
+            source_name=source_display_name,
             source_label=source_label,
             data_root=_session_root(session_id),
         )
@@ -390,7 +395,7 @@ def _submit_video_job(
         return result
 
     return runtime.job_manager.submit(
-        source_name=source_path.stem,
+        source_name=source_display_name,
         input_path=str(source_path),
         output_path=str(output_path),
         output_url=output_url,

@@ -1,7 +1,9 @@
 "use client";
 
 import React from "react";
+import Link from "next/link";
 import { CameraVideoIcon, CpuIcon, PlayIcon, RefreshIcon, TrashIcon, UploadIcon } from "./Icons";
+import { mediaUrl, sourceLabel } from "./UIHelpers";
 
 export default function VideoPipelineCard({
   uploadVideo,
@@ -17,6 +19,30 @@ export default function VideoPipelineCard({
   updateJob,
   deleteJob,
 }) {
+  const [isDragging, setIsDragging] = React.useState(false);
+
+  const handleDragOver = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+  };
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      const droppedFile = e.dataTransfer.files[0];
+      setVideoFile(droppedFile);
+    }
+  };
+
   return (
     <div className="space-y-6">
       {/* Form Card */}
@@ -44,8 +70,15 @@ export default function VideoPipelineCard({
 
         {/* Dropzone */}
         <div
-          className="relative border-2 border-dashed border-zinc-300 hover:border-orange-300 bg-zinc-50 hover:bg-orange-50/40 rounded-2xl p-7 text-center cursor-pointer transition-all flex flex-col items-center justify-center gap-3 group"
+          className={`relative border-2 border-dashed rounded-2xl p-7 text-center cursor-pointer transition-all flex flex-col items-center justify-center gap-3 group ${
+            isDragging
+              ? "border-orange-500 bg-orange-50/70 scale-[1.01]"
+              : "border-zinc-300 hover:border-orange-300 bg-zinc-50 hover:bg-orange-50/40"
+          }`}
           onClick={() => fileInputRef.current?.click()}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
         >
           <div className="w-12 h-12 rounded-2xl bg-white border border-zinc-200/80 group-hover:border-orange-200 text-zinc-400 group-hover:text-orange-500 flex items-center justify-center transition-all group-hover:scale-105 shadow-sm">
             <UploadIcon className="w-5 h-5" />
@@ -105,14 +138,14 @@ export default function VideoPipelineCard({
       {activeJob && (
         <div className="app-surface p-5 md:p-6 space-y-4">
           <div className="flex items-center justify-between border-b border-zinc-100 pb-3.5">
-            <div className="flex items-center gap-2">
-              <CpuIcon className="w-4 h-4 text-zinc-400" />
-              <span className="text-sm font-semibold text-zinc-900">
-                {activeJob.source_name || activeJob.filename || "Video Stream"}
+            <div className="flex items-center gap-2 min-w-0 pr-2">
+              <CpuIcon className="w-4 h-4 text-zinc-400 shrink-0" />
+              <span className="text-sm font-semibold text-zinc-900 truncate" title={activeJob.uploaded_filename || activeJob.filename || activeJob.source_name}>
+                {activeJob.uploaded_filename || activeJob.filename || sourceLabel(activeJob.source_name, "Surveillance Stream")}
               </span>
             </div>
             <span
-              className={`text-xs font-medium px-3 py-1 rounded-full ${
+              className={`text-xs font-medium px-3 py-1 rounded-full shrink-0 ${
                 activeJob.status === "completed"
                   ? "bg-emerald-50 text-emerald-700"
                   : activeJob.status === "processing"
@@ -138,11 +171,19 @@ export default function VideoPipelineCard({
             </div>
           </div>
 
-          <div className="flex gap-2.5 pt-1">
+          <div className="flex flex-wrap gap-2.5 pt-1 border-t border-zinc-100/80">
+            {activeJob.status === "completed" && (
+              <Link
+                href={`/surveillance?jobId=${activeJob.job_id}`}
+                className="flex-1 py-2.5 px-4 rounded-xl bg-orange-600 hover:bg-orange-700 text-white font-medium text-sm transition-all text-center flex items-center justify-center gap-2 shadow-sm"
+              >
+                Watch in Surveillance Player →
+              </Link>
+            )}
             {["queued", "running", "processing"].includes(activeJob.status) && (
               <button
                 type="button"
-                className="flex-1 py-2.5 px-4 rounded-full bg-rose-50 hover:bg-rose-100 text-rose-700 font-medium text-sm transition-all"
+                className="flex-1 py-2.5 px-4 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 font-medium text-sm transition-all"
                 onClick={() => updateJob(activeJob.job_id, "cancel")}
               >
                 Cancel job
@@ -151,7 +192,7 @@ export default function VideoPipelineCard({
             {["completed", "failed"].includes(activeJob.status) && (
               <button
                 type="button"
-                className="flex-1 py-2.5 px-4 rounded-full bg-zinc-100 hover:bg-zinc-200 text-zinc-700 font-medium text-sm transition-all"
+                className="py-2.5 px-4 rounded-xl bg-zinc-100 hover:bg-zinc-200 text-zinc-700 font-medium text-sm transition-all"
                 onClick={() => updateJob(activeJob.job_id, "retry")}
               >
                 Retry job
@@ -160,7 +201,7 @@ export default function VideoPipelineCard({
             {["completed", "failed", "canceled"].includes(activeJob.status) && (
               <button
                 type="button"
-                className="flex-1 py-2.5 px-4 rounded-full bg-white border border-zinc-200/80 hover:border-rose-200 hover:bg-rose-50 text-rose-600 font-medium text-sm transition-all flex items-center justify-center gap-1.5"
+                className="py-2.5 px-4 rounded-xl bg-white border border-zinc-200/80 hover:border-rose-200 hover:bg-rose-50 text-rose-600 font-medium text-sm transition-all flex items-center justify-center gap-1.5"
                 onClick={() => deleteJob(activeJob.job_id)}
               >
                 <TrashIcon className="w-3.5 h-3.5" />

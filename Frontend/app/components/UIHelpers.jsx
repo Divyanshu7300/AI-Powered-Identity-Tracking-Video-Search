@@ -19,7 +19,7 @@ export function sourceLabel(label, fallback = "Uploaded video") {
 
 export function mediaUrl(path) {
   if (!path) return PLACEHOLDER_IMAGE;
-  if (/^https?:\/\//i.test(path)) return path;
+  if (/^https?:\/\//i.test(path) || path.startsWith("data:") || path.startsWith("/api/")) return path;
   return `/api${path.startsWith("/") ? path : `/${path}`}`;
 }
 

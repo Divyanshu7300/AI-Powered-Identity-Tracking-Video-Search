@@ -94,6 +94,9 @@ export async function readJson(response) {
 
 export async function apiRequest(path, options = {}) {
   const headers = new Headers(options.headers);
+  if (options.body && typeof options.body === "string" && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
   const response = await fetch(path, { ...options, headers, cache: "no-store" });
   const payload = await readJson(response);
   if (!response.ok) {
@@ -104,7 +107,14 @@ export async function apiRequest(path, options = {}) {
     } else if (typeof payload.message === "string") {
       errMsg = payload.message;
     } else if (Array.isArray(payload.detail)) {
-      errMsg = payload.detail.map((d) => d.msg || d.detail || JSON.stringify(d)).join(", ");
+      errMsg = payload.detail
+        .map((d) => {
+          const field = Array.isArray(d.loc)
+            ? d.loc.filter((part) => part !== "body" && part !== "query" && part !== "path").join(".")
+            : "";
+          return field ? `${field}: ${d.msg}` : d.msg || d.detail || JSON.stringify(d);
+        })
+        .join(", ");
     } else if (payload.detail && typeof payload.detail === "object") {
       errMsg = payload.detail.msg || payload.detail.message || JSON.stringify(payload.detail);
     } else if (typeof payload === "string") {

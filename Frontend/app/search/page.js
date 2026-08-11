@@ -10,7 +10,7 @@ import MatchCard from "../components/MatchCard";
 import FormattedRagAnswer from "../components/FormattedRagAnswer";
 import InspectModal from "../components/InspectModal";
 import { SearchIcon, SparklesIcon, AlertIcon, CheckIcon } from "../components/Icons";
-import { DEFAULT_TEXT_QUERY } from "../components/UIHelpers";
+import { DEFAULT_TEXT_QUERY, mediaUrl } from "../components/UIHelpers";
 
 export default function SearchPage() {
   const router = useRouter();
@@ -136,6 +136,24 @@ export default function SearchPage() {
     }
   }
 
+  async function watchClip(memoryId, title) {
+    setBusy(`watch:${memoryId}`);
+    setError("");
+    try {
+      const res = await apiRequest(`/api/tracking/clips/${encodeURIComponent(memoryId)}`, {
+        method: "POST",
+        body: JSON.stringify({ padding_frames: 15 }),
+      });
+      if (res.clip_url) {
+        router.push(`/surveillance?videoUrl=${encodeURIComponent(res.clip_url)}`);
+      }
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy("");
+    }
+  }
+
   async function exportClip(memoryId, title) {
     setBusy(`clip:${memoryId}`);
     setError("");
@@ -147,7 +165,14 @@ export default function SearchPage() {
       setNotice(`Exported evidence video clip for ${title}`);
       await refreshDashboard();
       if (res.clip_url) {
-        window.open(res.clip_url, "_blank");
+        const downloadUrl = mediaUrl(res.clip_url);
+        const a = document.createElement("a");
+        a.href = downloadUrl;
+        a.download = `${title.replace(/[^a-z0-9_-]/gi, "_")}_evidence.mp4`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setNotice(`Exported and downloaded evidence clip for ${title}`);
       }
     } catch (err) {
       setError(err.message);
@@ -300,6 +325,7 @@ export default function SearchPage() {
             track={inspectTrack}
             onClose={() => setInspectTrack(null)}
             onExportClip={exportClip}
+            onWatchClip={watchClip}
             busy={busy}
           />
         )}

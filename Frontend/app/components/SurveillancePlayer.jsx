@@ -2,9 +2,9 @@
 
 import React, { useRef, useState } from "react";
 import Link from "next/link";
-import { ViewfinderCorners } from "./UIHelpers";
+import { mediaUrl, ViewfinderCorners } from "./UIHelpers";
 
-export default function SurveillancePlayer({ videoUrl, rawInputUrl, latestRunResult, focusedVideo, setFocusedVideo }) {
+export default function SurveillancePlayer({ videoUrl, rawInputUrl, activeJob, latestRunResult, focusedVideo, setFocusedVideo }) {
   const videoRef = useRef(null);
   const containerRef = useRef(null);
 
@@ -15,8 +15,11 @@ export default function SurveillancePlayer({ videoUrl, rawInputUrl, latestRunRes
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
 
-  const annotatedUrl = videoUrl || focusedVideo || latestRunResult?.output_video_url || latestRunResult?.annotated_video_url || latestRunResult?.video_url;
-  const sourceUrl = rawInputUrl || latestRunResult?.input_video_url || latestRunResult?.raw_video_url;
+  const rawAnnotated = videoUrl || focusedVideo || activeJob?.output_url || activeJob?.result?.output_url || activeJob?.result?.output_video_url || latestRunResult?.output_url || latestRunResult?.output_video_url || latestRunResult?.annotated_video_url || latestRunResult?.video_url;
+  const rawSource = rawInputUrl || activeJob?.input_url || activeJob?.result?.input_url || activeJob?.result?.input_video_url || latestRunResult?.input_url || latestRunResult?.input_video_url || latestRunResult?.raw_video_url;
+
+  const annotatedUrl = rawAnnotated ? mediaUrl(rawAnnotated) : "";
+  const sourceUrl = rawSource ? mediaUrl(rawSource) : "";
   const currentSrc = useRaw && sourceUrl ? sourceUrl : annotatedUrl;
 
   const handlePlayPause = () => {
@@ -28,9 +31,6 @@ export default function SurveillancePlayer({ videoUrl, rawInputUrl, latestRunRes
     }
   };
 
-  React.useEffect(() => {
-    if (annotatedUrl && setFocusedVideo) setFocusedVideo(annotatedUrl);
-  }, [annotatedUrl, setFocusedVideo]);
 
   const handleSpeedChange = (speed) => {
     setPlaybackRate(speed);
@@ -45,17 +45,14 @@ export default function SurveillancePlayer({ videoUrl, rawInputUrl, latestRunRes
     videoRef.current.currentTime = Math.max(0, videoRef.current.currentTime + frames * (1 / 30));
   };
 
-  const handleTogglePiP = async () => {
-    if (!videoRef.current) return;
-    try {
-      if (document.pictureInPictureElement) {
-        await document.exitPictureInPicture();
-      } else if (document.pictureInPictureEnabled) {
-        await videoRef.current.requestPictureInPicture();
-      }
-    } catch (err) {
-      console.error(err);
-    }
+  const handleDownloadVideo = () => {
+    if (!currentSrc) return;
+    const a = document.createElement("a");
+    a.href = currentSrc;
+    a.download = currentSrc.split("/").pop() || "surveillance_video.mp4";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
   };
 
   const handleToggleFullscreen = () => {
@@ -238,15 +235,17 @@ export default function SurveillancePlayer({ videoUrl, rawInputUrl, latestRunRes
                     <span>Snapshot</span>
                   </button>
 
+
                   <button
                     type="button"
-                    onClick={handleTogglePiP}
-                    className="p-1.5 rounded-full bg-white/10 hover:bg-white/20 text-zinc-200 border border-white/10 transition-colors cursor-pointer"
-                    title="Picture in Picture"
+                    onClick={handleDownloadVideo}
+                    className="px-3 py-1.5 rounded-full bg-indigo-600/80 hover:bg-indigo-600 text-white text-xs font-semibold border border-indigo-400/40 transition-colors flex items-center gap-1.5 cursor-pointer shadow-sm"
+                    title="Download video"
                   >
-                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
                     </svg>
+                    <span>Download</span>
                   </button>
 
                   <button

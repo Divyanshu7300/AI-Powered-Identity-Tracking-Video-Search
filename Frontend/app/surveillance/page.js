@@ -9,17 +9,18 @@ import SurveillancePlayer from "../components/SurveillancePlayer";
 import TrackDetections from "../components/TrackDetections";
 import InspectModal from "../components/InspectModal";
 import { VideoIcon, AlertIcon, CheckIcon } from "../components/Icons";
-import { sourceLabel } from "../components/UIHelpers";
+import { mediaUrl, sourceLabel } from "../components/UIHelpers";
 
 function SurveillancePageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const selectedJobId = searchParams.get("jobId");
+  const queryVideoUrl = searchParams.get("videoUrl");
 
   const { isLoaded, isSignedIn } = useAuth();
   const [nativeUser, setNativeUser] = useState("");
 
-  const [focusedVideo, setFocusedVideo] = useState(null);
+  const [focusedVideo, setFocusedVideo] = useState(queryVideoUrl ? mediaUrl(queryVideoUrl) : null);
   const [inspectTrack, setInspectTrack] = useState(null);
   const [busy, setBusy] = useState("");
   const [notice, setNotice] = useState("");
@@ -50,18 +51,36 @@ function SurveillancePageContent() {
       const found = jobs.find((j) => j.job_id === selectedJobId);
       if (found) return found;
     }
-    return jobs.find((j) => j.status === "completed" && j.result) || jobs[0] || null;
+    return jobs.find((j) => j.status === "completed") || jobs[0] || null;
   }, [selectedJobId, jobs]);
 
   const latestRunResult = activeJob?.result || null;
 
   const currentVideoTracks = useMemo(() => {
-    const activeSource = latestRunResult?.source_name || activeJob?.source_name;
+    const activeSource = latestRunResult?.source_name || activeJob?.source_name || activeJob?.uploaded_filename;
     if (!activeSource) return tracks;
     return tracks.filter(
       (t) => t.source_name === activeSource || t.source_label === activeSource || sourceLabel(t.source_label || t.source_name) === sourceLabel(activeSource)
     );
   }, [tracks, latestRunResult, activeJob]);
+
+  async function watchClip(memoryId, title) {
+    setBusy(`watch:${memoryId}`);
+    setError("");
+    try {
+      const res = await apiRequest(`/api/tracking/clips/${encodeURIComponent(memoryId)}`, {
+        method: "POST",
+        body: JSON.stringify({ padding_frames: 15 }),
+      });
+      if (res.clip_url) {
+        setFocusedVideo(mediaUrl(res.clip_url));
+      }
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy("");
+    }
+  }
 
   async function exportClip(memoryId, title) {
     setBusy(`clip:${memoryId}`);
@@ -74,7 +93,14 @@ function SurveillancePageContent() {
       setNotice(`Exported evidence video clip for ${title}`);
       await refreshDashboard();
       if (res.clip_url) {
-        window.open(res.clip_url, "_blank");
+        const downloadUrl = mediaUrl(res.clip_url);
+        const a = document.createElement("a");
+        a.href = downloadUrl;
+        a.download = `${title.replace(/[^a-z0-9_-]/gi, "_")}_evidence.mp4`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setNotice(`Exported and downloaded evidence clip for ${title}`);
       }
     } catch (err) {
       setError(err.message);
@@ -116,7 +142,7 @@ function SurveillancePageContent() {
               >
                 {jobs.map((j) => (
                   <option key={j.job_id} value={j.job_id}>
-                    {j.source_name || j.filename || j.job_id.slice(0, 8)} ({j.status})
+                    {j.uploaded_filename || j.filename || sourceLabel(j.source_name, "Surveillance Stream")} ({j.status})
                   </option>
                 ))}
               </select>
@@ -154,6 +180,7 @@ function SurveillancePageContent() {
         {/* Main Video Canvas Player */}
         <div className="lg:col-span-8 space-y-4">
           <SurveillancePlayer
+            activeJob={activeJob}
             latestRunResult={latestRunResult}
             focusedVideo={focusedVideo}
             setFocusedVideo={setFocusedVideo}
@@ -189,6 +216,7 @@ function SurveillancePageContent() {
           track={inspectTrack}
           onClose={() => setInspectTrack(null)}
           onExportClip={exportClip}
+          onWatchClip={watchClip}
           busy={busy}
         />
       )}

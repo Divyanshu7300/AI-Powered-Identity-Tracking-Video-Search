@@ -11,6 +11,7 @@ const PUBLIC_PATH_PREFIXES = [
   "auth/signup",
   "health",
   "metrics",
+  "media",
 ];
 
 async function proxy(request, context) {

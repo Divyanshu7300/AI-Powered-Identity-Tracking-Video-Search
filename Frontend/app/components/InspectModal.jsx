@@ -5,7 +5,7 @@ import React from "react";
 import { PlayIcon, UserIcon } from "./Icons";
 import { mediaUrl, sourceLabel, ViewfinderCorners } from "./UIHelpers";
 
-export default function InspectModal({ inspectTrack, track, onClose, onExportClip, isExporting, busy }) {
+export default function InspectModal({ inspectTrack, track, onClose, onExportClip, onWatchClip, isExporting, busy }) {
   const subject = inspectTrack || track;
   if (!subject) return null;
 
@@ -71,25 +71,44 @@ export default function InspectModal({ inspectTrack, track, onClose, onExportCli
           </div>
         </div>
 
-        <div className="flex gap-2 justify-end pt-3.5 border-t border-zinc-100">
+        <div className="flex items-center justify-end gap-2 pt-3.5 border-t border-zinc-100">
           <button
             type="button"
-            className="px-4 py-2 rounded-full bg-white border border-zinc-200/80 text-zinc-700 font-medium text-sm hover:bg-zinc-50 transition-all"
+            className="px-4 py-2 rounded-full bg-white border border-zinc-200/80 text-zinc-700 font-medium text-xs hover:bg-zinc-50 transition-all cursor-pointer"
             onClick={onClose}
           >
             Close
           </button>
           <button
             type="button"
-            className="bg-zinc-900 hover:bg-zinc-800 text-white font-medium text-sm py-2 px-4 rounded-full shadow-sm transition-all flex items-center gap-1.5 disabled:opacity-50"
-            disabled={isExporting || Boolean(busy)}
+            className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium text-xs py-2 px-4 rounded-full shadow-sm transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+            disabled={Boolean(busy)}
             onClick={() => {
-              onExportClip(subject.memory_id || subject.track_id, `Subject #${subject.track_id}`);
+              const memoryId = subject.memory_id || subject.track_id;
+              if (onWatchClip) {
+                onWatchClip(memoryId, `Subject #${subject.track_id}`);
+              } else {
+                const target = subject.job_id || subject.source_name || "";
+                window.location.href = `/surveillance?jobId=${encodeURIComponent(target)}`;
+              }
               onClose();
             }}
           >
-            <PlayIcon className="w-4 h-4 text-indigo-300" />
-            Export evidence clip
+            <PlayIcon className="w-3.5 h-3.5 text-white" />
+            <span>Watch</span>
+          </button>
+          <button
+            type="button"
+            className="bg-zinc-900 hover:bg-zinc-800 text-white font-medium text-xs py-2 px-4 rounded-full shadow-sm transition-all flex items-center gap-1.5 disabled:opacity-50 cursor-pointer"
+            disabled={isExporting || Boolean(busy)}
+            onClick={() => {
+              onExportClip(subject.memory_id || subject.track_id, `Subject #${subject.track_id}`);
+            }}
+          >
+            <svg className="w-3.5 h-3.5 text-indigo-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+            </svg>
+            <span>Download</span>
           </button>
         </div>
       </div>

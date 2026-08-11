@@ -3,17 +3,11 @@
 import Image from "next/image";
 import { useMemo, useState } from "react";
 import { UserIcon } from "./Icons";
+import { mediaUrl } from "./UIHelpers";
 
 const PAGE_SIZE = 24;
-const PLACEHOLDER_IMAGE = "data:image/gif;base64,R0lGODlhAQABAAAAACw=";
 
-function mediaUrl(path) {
-  if (!path) return PLACEHOLDER_IMAGE;
-  if (/^https?:\/\//i.test(path)) return path;
-  return `/api${path.startsWith("/") ? path : `/${path}`}`;
-}
-
-export default function TrackDetections({ tracks, onInspect, onExportClip, busy }) {
+export default function TrackDetections({ tracks, onInspect, onExportClip, busy, title = "Detected subjects", headerAction }) {
   const [page, setPage] = useState(1);
   const totalPages = Math.max(1, Math.ceil(tracks.length / PAGE_SIZE));
   const currentPage = Math.min(page, totalPages);
@@ -25,49 +19,60 @@ export default function TrackDetections({ tracks, onInspect, onExportClip, busy 
   return (
     <section className="app-surface p-5 md:p-6 space-y-4">
       <div className="flex items-center justify-between border-b border-zinc-100 pb-3.5">
-        <h2 className="text-sm font-semibold text-zinc-900 flex items-center gap-2">
-          <UserIcon className="w-4 h-4 text-zinc-400" />
-          Detected subjects
+        <h2 className="text-sm font-semibold text-zinc-900 flex items-center gap-2 min-w-0 pr-2">
+          <UserIcon className="w-4 h-4 text-zinc-400 shrink-0" />
+          <span className="truncate" title={title}>{title}</span>
         </h2>
-        <span className="text-xs font-medium bg-zinc-100 text-zinc-600 px-2.5 py-1 rounded-full">{tracks.length} subjects</span>
+        <div className="flex items-center gap-2.5 shrink-0">
+          <span className="text-xs font-medium bg-zinc-100 text-zinc-600 px-2.5 py-1 rounded-full tabular-nums">
+            {tracks.length} subjects
+          </span>
+          {headerAction}
+        </div>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3 max-h-[30rem] overflow-y-auto pr-1">
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-6 gap-3.5 max-h-[34rem] overflow-y-auto pr-1">
         {visibleTracks.map((track) => (
           <button
             key={track.memory_id}
             type="button"
-            className="p-3 rounded-2xl bg-white border border-zinc-200/80 hover:border-indigo-200 hover:shadow-md flex gap-3.5 items-center transition-all text-left group"
+            className="group p-3 rounded-2xl bg-white border border-zinc-200/80 hover:border-indigo-300 hover:shadow-md flex items-center gap-3 transition-all cursor-pointer text-left overflow-hidden min-w-0"
             onClick={() => onInspect(track)}
           >
-            <div className="relative w-14 h-[72px] bg-zinc-50 border border-zinc-200/80 rounded-xl overflow-hidden flex items-center justify-center shrink-0">
+            <div className="relative w-14 h-[72px] bg-zinc-950/5 border border-zinc-200/80 rounded-xl overflow-hidden flex items-center justify-center shrink-0">
               <Image
                 alt="Subject crop"
                 src={mediaUrl(track.best_crop_url || track.crop_url)}
                 width={56}
                 height={72}
                 unoptimized
-                className="w-full h-full object-contain bg-zinc-50 p-0.5 group-hover:scale-105 transition-transform"
+                className="w-full h-full object-contain p-0.5 group-hover:scale-105 transition-transform"
               />
             </div>
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center justify-between gap-1">
-                <span className="text-xs font-semibold text-zinc-900 truncate">Subject #{track.track_id}</span>
-                <span className="text-[10px] font-semibold bg-zinc-100 text-zinc-700 px-2 py-0.5 rounded-full">
+            <div className="flex-1 min-w-0 space-y-1">
+              <div className="flex items-center justify-between gap-1.5 min-w-0">
+                <span className="text-xs font-semibold text-zinc-900 truncate">
+                  Subject #{track.track_id}
+                </span>
+                <span className="text-[10px] font-bold bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-full shrink-0 tabular-nums">
                   {Math.round((track.best_confidence || 0) * 100)}%
                 </span>
               </div>
-              <p className="text-[11px] text-zinc-400 font-medium mt-1">{track.hits} detections</p>
-              {onExportClip && (
-                <span className="text-[11px] text-indigo-600 font-medium mt-1.5 inline-block group-hover:underline">
-                  View details
+              <div className="flex items-center justify-between text-[11px] font-medium pt-0.5">
+                <span className="text-zinc-400 truncate tabular-nums">
+                  {track.hits} detections
                 </span>
-              )}
+                <span className="text-indigo-600 font-semibold group-hover:underline shrink-0 flex items-center gap-0.5">
+                  Inspect →
+                </span>
+              </div>
             </div>
           </button>
         ))}
         {!tracks.length && (
-          <div className="col-span-full py-8 text-center text-zinc-400 text-sm">No detections recorded for current video yet.</div>
+          <div className="col-span-full py-8 text-center text-zinc-400 text-sm">
+            No detections recorded for current video yet.
+          </div>
         )}
       </div>
 
@@ -79,7 +84,7 @@ export default function TrackDetections({ tracks, onInspect, onExportClip, busy 
           <div className="flex gap-2">
             <button
               type="button"
-              className="px-3 py-1 rounded-full border border-zinc-200/80 hover:bg-zinc-50 disabled:opacity-40 transition-colors"
+              className="px-3 py-1 rounded-full border border-zinc-200/80 hover:bg-zinc-50 disabled:opacity-40 transition-colors cursor-pointer"
               disabled={currentPage === 1}
               onClick={() => setPage((value) => Math.max(1, value - 1))}
             >
@@ -87,7 +92,7 @@ export default function TrackDetections({ tracks, onInspect, onExportClip, busy 
             </button>
             <button
               type="button"
-              className="px-3 py-1 rounded-full border border-zinc-200/80 hover:bg-zinc-50 disabled:opacity-40 transition-colors"
+              className="px-3 py-1 rounded-full border border-zinc-200/80 hover:bg-zinc-50 disabled:opacity-40 transition-colors cursor-pointer"
               disabled={currentPage === totalPages}
               onClick={() => setPage((value) => Math.min(totalPages, value + 1))}
             >

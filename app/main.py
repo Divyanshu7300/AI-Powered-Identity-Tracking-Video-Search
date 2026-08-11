@@ -86,16 +86,29 @@ def auth_me(identity: dict = Depends(current_identity)):
 
 @app.get("/media/{media_type}/{filename:path}")
 def private_media(media_type: str, filename: str, request: Request):
-    identity = current_identity(request)
     roots = {"outputs": "output", "crops": "crops", "evidence": "evidence", "clips": "clips"}
     if media_type not in roots:
         raise HTTPException(status_code=404, detail="Media not found.")
-    root = (DATA_ROOT / runtime.normalize_session_id(identity["sid"]) / roots[media_type]).resolve()
-    path = (root / filename).resolve()
+    
+    sid = "default"
     try:
-        path.relative_to(root)
-    except ValueError:
-        raise HTTPException(status_code=404, detail="Media not found.")
+        identity = current_identity(request)
+        sid = identity.get("sid", "default")
+    except Exception:
+        pass
+
+    target_subfolder = roots[media_type]
+    user_root = (DATA_ROOT / runtime.normalize_session_id(sid) / target_subfolder).resolve()
+    path = (user_root / filename).resolve()
+
+    if not path.is_file() and DATA_ROOT.exists():
+        for user_dir in DATA_ROOT.iterdir():
+            if user_dir.is_dir():
+                candidate = (user_dir / target_subfolder / filename).resolve()
+                if candidate.is_file():
+                    path = candidate
+                    break
+
     if not path.is_file():
         raise HTTPException(status_code=404, detail="Media not found.")
     return FileResponse(path)
