@@ -1,23 +1,31 @@
 from __future__ import annotations
 
 import os
+import time
 import uuid
 from dataclasses import asdict
 from pathlib import Path
 from typing import Optional
+from threading import Lock
 
-from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field
 
 from app.services import model_cache, runtime
 from app.services.pipeline import MOTReIDPipeline, PipelineConfig
+from app.services.auth import require_auth
 
 
-router = APIRouter(prefix="/tracking", tags=["tracking"])
+router = APIRouter(prefix="/tracking", tags=["tracking"], dependencies=[Depends(require_auth)])
 ALLOWED_VIDEO_SUFFIXES = {".mp4", ".avi", ".mov", ".mkv", ".webm"}
-MAX_UPLOAD_BYTES = int(os.getenv("MOT_REID_MAX_UPLOAD_BYTES", str(512 * 1024 * 1024)))
-LOCAL_VIDEO_ROOTS = (Path("data/input").resolve(), Path("test").resolve())
-LOCAL_OUTPUT_ROOT = Path("data/output").resolve()
+MAX_UPLOAD_BYTES = int(os.getenv("MOT_REID_MAX_UPLOAD_BYTES", str(512 * 1024 * 1024))) # 512 MB
+LOCAL_VIDEO_ROOTS = (Path("data/users").resolve(), Path("test").resolve())
+ALLOWED_DETECTOR_MODELS = {"yolov8n.pt", "yolov8s.pt"}
+MAX_IMAGE_BYTES = int(os.getenv("MOT_REID_MAX_IMAGE_BYTES", str(10 * 1024 * 1024)))
+UPLOADS_PER_HOUR = int(os.getenv("MOT_REID_UPLOADS_PER_HOUR", "10"))
+SESSION_QUOTA_BYTES = int(os.getenv("MOT_REID_SESSION_QUOTA_BYTES", str(2 * 1024 * 1024 * 1024)))
+_upload_events: dict[str, list[tuple[float, int]]] = {}
+_upload_lock = Lock()
 
 
 class TrackRequest(BaseModel):
@@ -32,6 +40,7 @@ class TextSearchRequest(BaseModel):
     top_k: int = Field(default=5, ge=1, le=20)
     start_time_seconds: Optional[float] = None
     end_time_seconds: Optional[float] = None
+    use_llm: bool = True
 
 
 
@@ -45,17 +54,26 @@ class ModelWarmupRequest(BaseModel):
     clip: bool = False
 
 
+class SemanticSettingsRequest(BaseModel):
+    clip_enabled: bool
+
+
 @router.post("/run")
 def run_tracking(payload: TrackRequest, request: Request):
     session_id = _session_id(request)
+    _check_upload_quota(session_id)
     source_path = Path(payload.source_path).resolve()
     if not source_path.exists():
         raise HTTPException(status_code=404, detail=f"Video not found: {payload.source_path}")
     if source_path.suffix.lower() not in ALLOWED_VIDEO_SUFFIXES or not _is_allowed_local_video(source_path):
         raise HTTPException(status_code=400, detail="Source video must be inside data/input or test.")
-    output_path = Path(payload.output_path).resolve()
-    if not _is_within(output_path, LOCAL_OUTPUT_ROOT):
-        raise HTTPException(status_code=400, detail="Output path must be inside data/output.")
+    output_path = Path(payload.output_path)
+    if not output_path.is_absolute():
+        output_path = (_session_root(session_id) / "output" / output_path.name).resolve()
+    else:
+        output_path = output_path.resolve()
+    if not _is_within(output_path, _session_root(session_id) / "output"):
+        raise HTTPException(status_code=400, detail="Output path must be inside the session output directory.")
 
     config = runtime.snapshot_config(session_id)
     config.conf_threshold = payload.conf_threshold
@@ -71,8 +89,9 @@ async def upload_video(
     frame_stride: Optional[int] = Form(None),
 ):
     session_id = _session_id(request)
-    uploads_dir = Path("data/input/uploads")
-    outputs_dir = Path("data/output")
+    namespace_root = _session_root(session_id)
+    uploads_dir = namespace_root / "input/uploads"
+    outputs_dir = namespace_root / "output"
     uploads_dir.mkdir(parents=True, exist_ok=True)
     outputs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -80,7 +99,7 @@ async def upload_video(
     suffix = Path(file.filename or "").suffix.lower()
     if suffix not in ALLOWED_VIDEO_SUFFIXES:
         raise HTTPException(status_code=400, detail="Upload a supported video file (mp4, avi, mov, mkv, or webm).")
-    if file.content_type and not file.content_type.startswith("video/"):
+    if not file.content_type or not file.content_type.startswith("video/"):
         raise HTTPException(status_code=400, detail="Uploaded file must have a video content type.")
     input_path = uploads_dir / f"{upload_id}{suffix}"
     output_path = outputs_dir / f"{upload_id}_tracked.mp4"
@@ -97,9 +116,18 @@ async def upload_video(
         raise
     finally:
         await file.close()
+    if not _is_valid_video_content(input_path):
+        input_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail="Uploaded content is not a readable video.")
+    if _directory_size(namespace_root) > SESSION_QUOTA_BYTES:
+        input_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=413, detail="Session storage quota exceeded.")
+    _record_upload(session_id, bytes_written)
 
     config = runtime.snapshot_config(session_id)
     if detector_model:
+        if detector_model not in ALLOWED_DETECTOR_MODELS:
+            raise HTTPException(status_code=400, detail="Unsupported detector model.")
         config.detector_model = detector_model
     if frame_stride:
         config.frame_stride = max(1, int(frame_stride))
@@ -109,7 +137,7 @@ async def upload_video(
         output_path,
         session_id=session_id,
         uploaded_filename=file.filename,
-        output_url=f"/outputs/{output_path.name}",
+        output_url=f"/media/outputs/{output_path.name}",
     )
 
 
@@ -122,10 +150,33 @@ def warmup_models(payload: ModelWarmupRequest, request: Request):
             detector_conf_threshold=config.conf_threshold,
             reid_weights=config.reid_weights if payload.reid else None,
             reid_model_name=config.reid_model_name if payload.reid else None,
-            clip_model_name="openai/clip-vit-base-patch32" if payload.clip else None,
+            clip_model_name=config.semantic_model_name if payload.clip else None,
         )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Model warm-up failed: {exc}")
+
+
+@router.get("/search/settings")
+def get_search_settings(request: Request):
+    return runtime.get_pipeline(_session_id(request)).semantic_index.status()
+
+
+@router.post("/search/settings")
+def update_search_settings(payload: SemanticSettingsRequest, request: Request):
+    pipeline = runtime.get_pipeline(_session_id(request))
+    pipeline.config.semantic_enable_clip = payload.clip_enabled
+    pipeline.semantic_index.set_clip_enabled(payload.clip_enabled)
+    return pipeline.semantic_index.status()
+
+
+@router.post("/search/reindex")
+def reindex_search(request: Request):
+    """Refresh captions and vectors for the session's currently processed video."""
+    pipeline = runtime.get_pipeline(_session_id(request))
+    result = pipeline.reindex_current_video()
+    if result.get("message"):
+        raise HTTPException(status_code=409, detail=result["message"])
+    return result
 
 
 @router.get("/jobs")
@@ -172,8 +223,8 @@ def retry_job(job_id: str, request: Request):
         raise HTTPException(status_code=400, detail=f"Invalid or unauthorized source video path: {source_path}")
 
     output_path = Path(str(job["output_path"])).resolve()
-    if not _is_within(output_path, LOCAL_OUTPUT_ROOT):
-        raise HTTPException(status_code=400, detail="Output path must be inside data/output.")
+    if not _is_within(output_path, _session_root(session_id) / "output"):
+        raise HTTPException(status_code=400, detail="Output path must be inside the session output directory.")
 
     return _submit_video_job(
         config,
@@ -197,8 +248,18 @@ def delete_job(job_id: str, request: Request):
 
 
 @router.post("/search")
-def search_person(request: Request, file: UploadFile = File(...), top_k: int = 5):
-    return runtime.get_pipeline(_session_id(request)).search_person(image_bytes=file.file.read(), top_k=top_k)
+def search_person(
+    request: Request,
+    file: UploadFile = File(...),
+    top_k: int = 5,
+    mode: str = "hybrid",
+):
+    image_bytes = file.file.read(MAX_IMAGE_BYTES + 1)
+    if len(image_bytes) > MAX_IMAGE_BYTES:
+        raise HTTPException(status_code=413, detail="Query image exceeds the configured size limit.")
+    if not file.content_type or not file.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="Query file must be an image.")
+    return runtime.get_pipeline(_session_id(request)).search_person(image_bytes=image_bytes, top_k=top_k, mode=mode)
 
 
 @router.post("/search/text")
@@ -208,6 +269,7 @@ def search_person_by_text(payload: TextSearchRequest, request: Request):
         top_k=payload.top_k,
         start_time_seconds=payload.start_time_seconds,
         end_time_seconds=payload.end_time_seconds,
+        use_llm=payload.use_llm,
     )
 
 
@@ -234,6 +296,15 @@ def analytics_track(memory_id: str, request: Request):
         raise HTTPException(status_code=404, detail=f"Track memory not found: {memory_id}")
 
 
+@router.delete("/analytics/tracks/{memory_id:path}")
+def delete_track_memory_endpoint(memory_id: str, request: Request):
+    try:
+        runtime.get_pipeline(_session_id(request)).delete_track_memory(memory_id)
+        return {"deleted": True, "memory_id": memory_id}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
 @router.post("/clips/{memory_id:path}")
 
 def export_track_clip(memory_id: str, payload: ClipExportRequest, request: Request):
@@ -248,6 +319,23 @@ def export_track_clip(memory_id: str, payload: ClipExportRequest, request: Reque
         raise HTTPException(status_code=404, detail=str(exc))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/reset")
+def reset_session_data(request: Request):
+    session_id = _session_id(request)
+    runtime.reset_session(session_id)
+    namespace_root = _session_root(session_id)
+    for folder in namespace_root.iterdir() if namespace_root.exists() else []:
+        if folder.is_dir():
+            for item in folder.rglob("*"):
+                if item.is_file() and not item.name.startswith("."):
+                    item.unlink(missing_ok=True)
+    return {
+        "status": "reset",
+        "session_id": session_id,
+        "message": "Session data, video archives, and track memories reset successfully.",
+    }
 
 
 @router.get("/health")
@@ -282,7 +370,13 @@ def _submit_video_job(
     output_url: str | None = None,
 ):
     def runner(progress_callback):
-        next_pipeline = MOTReIDPipeline(config=config, source_name=source_path.stem)
+        source_label = Path(uploaded_filename or source_path.name).stem
+        next_pipeline = MOTReIDPipeline(
+            config=config,
+            source_name=source_path.stem,
+            source_label=source_label,
+            data_root=_session_root(session_id),
+        )
         result = next_pipeline.run_video(
             source=str(source_path),
             output_path=str(output_path),
@@ -307,9 +401,38 @@ def _submit_video_job(
 
 
 def _session_id(request: Request) -> str:
-    return runtime.normalize_session_id(
-        request.headers.get("x-session-id") or request.query_params.get("session_id")
-    )
+    return runtime.normalize_session_id(request.state.identity["sid"])
+
+
+def _session_root(session_id: str) -> Path:
+    return Path("data/users") / runtime.normalize_session_id(session_id)
+
+
+def _check_upload_quota(session_id: str) -> None:
+    now = time.time()
+    with _upload_lock:
+        events = [(stamp, size) for stamp, size in _upload_events.get(session_id, []) if now - stamp < 3600]
+        if len(events) >= UPLOADS_PER_HOUR or sum(size for _, size in events) >= SESSION_QUOTA_BYTES:
+            raise HTTPException(status_code=429, detail="Upload rate or session storage quota exceeded.")
+        _upload_events[session_id] = events
+
+
+def _record_upload(session_id: str, size: int) -> None:
+    with _upload_lock:
+        _upload_events.setdefault(session_id, []).append((time.time(), size))
+
+
+def _is_valid_video_content(path: Path) -> bool:
+    import cv2
+    capture = cv2.VideoCapture(str(path))
+    try:
+        return bool(capture.isOpened())
+    finally:
+        capture.release()
+
+
+def _directory_size(root: Path) -> int:
+    return sum(path.stat().st_size for path in root.rglob("*") if path.is_file())
 
 
 def _ensure_job_session(job: dict, session_id: str) -> None:

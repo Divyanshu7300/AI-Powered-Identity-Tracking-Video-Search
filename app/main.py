@@ -1,18 +1,25 @@
 from __future__ import annotations
 
 import logging
+import os
+import re
+import secrets
 from pathlib import Path
 
-from fastapi import FastAPI
-from fastapi.responses import PlainTextResponse
+from dotenv import load_dotenv
+
+# Runtime creates the session pipeline at import time, so configuration must be
+# loaded before importing routes/runtime.
+load_dotenv()
+
+from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
-import os
 
 from app.routes.tracking import router as tracking_router
 from app.services import model_cache, runtime
-from dotenv import load_dotenv
-load_dotenv()
+from app.services.auth import LoginRequest, SignupRequest, current_identity, login, signup
+
 
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
@@ -25,12 +32,8 @@ app = FastAPI(
     description="YOLO + ReID + CLIP + Video RAG system",
 )
 
-origin = os.getenv("CORS_ORIGIN")
-allowed_origins = (
-    [value.strip() for value in origin.split(",") if value.strip()]
-    if origin
-    else ["http://localhost:3000", "http://127.0.0.1:3000"]
-)
+allowed_origins = [value.strip() for value in os.getenv("CORS_ORIGIN", "http://localhost:3000").split(",") if value.strip()]
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -40,36 +43,69 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-DATA_DIRS = [
-    "data/output",
-    "data/crops",
-    "data/evidence",
-    "data/clips",
-    "data/embeddings",
-]
+DATA_ROOT = Path("data/users")
+DATA_ROOT.mkdir(parents=True, exist_ok=True)
 
-for directory in DATA_DIRS:
-    Path(directory).mkdir(parents=True, exist_ok=True)
 
-STATIC_MOUNTS = {
-    "/outputs": "data/output",
-    "/crops": "data/crops",
-    "/evidence": "data/evidence",
-    "/clips": "data/clips",
-}
+@app.post("/auth/login")
+def auth_login(payload: LoginRequest, response: Response, request: Request):
+    result = login(payload, client_key=request.client.host if request.client else "unknown")
+    response.set_cookie("mot_reid_access_token", result["access_token"], httponly=True, samesite="lax", secure=os.getenv("COOKIE_SECURE", "false").lower() == "true", max_age=result["expires_in"])
+    return result
 
-for route, directory in STATIC_MOUNTS.items():
-    app.mount(route, StaticFiles(directory=directory), name=route.strip("/"))
+
+@app.post("/auth/signup", status_code=201)
+def auth_signup(payload: SignupRequest, response: Response, request: Request):
+    result = signup(payload, client_key=request.client.host if request.client else "unknown")
+    response.set_cookie("mot_reid_access_token", result["access_token"], httponly=True, samesite="lax", secure=os.getenv("COOKIE_SECURE", "false").lower() == "true", max_age=result["expires_in"])
+    return result
+
+
+@app.post("/auth/logout", status_code=204)
+def auth_logout(response: Response):
+    response.delete_cookie("mot_reid_access_token")
+
+
+def _is_hash_or_uuid(val: str) -> bool:
+    if not val:
+        return True
+    if re.match(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", val):
+        return True
+    if re.match(r"^(user_|usr_|session_|anon_|[0-9a-fA-F]{24,})", val):
+        return True
+    return False
+
+
+@app.get("/auth/me")
+def auth_me(identity: dict = Depends(current_identity)):
+    sub = identity.get("sub", "")
+    if _is_hash_or_uuid(sub):
+        return {"username": "Operator"}
+    return {"username": sub}
+
+
+@app.get("/media/{media_type}/{filename:path}")
+def private_media(media_type: str, filename: str, request: Request):
+    identity = current_identity(request)
+    roots = {"outputs": "output", "crops": "crops", "evidence": "evidence", "clips": "clips"}
+    if media_type not in roots:
+        raise HTTPException(status_code=404, detail="Media not found.")
+    root = (DATA_ROOT / runtime.normalize_session_id(identity["sid"]) / roots[media_type]).resolve()
+    path = (root / filename).resolve()
+    try:
+        path.relative_to(root)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Media not found.")
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Media not found.")
+    return FileResponse(path)
 
 app.include_router(tracking_router)
 
 
 @app.get("/health")
 def health_check():
-    data_dirs = {
-        directory: Path(directory).exists()
-        for directory in DATA_DIRS
-    }
+    data_dirs = {"data/users": DATA_ROOT.exists()}
     return {
         "status": "ok" if all(data_dirs.values()) else "degraded",
         "jobs": runtime.job_manager.summary(),

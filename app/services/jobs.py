@@ -172,6 +172,21 @@ class JobManager:
             self._order = [current_id for current_id in self._order if current_id != job_id]
             return True
 
+    def clear_session(self, session_id: str | None = None) -> int:
+        with self._lock:
+            matching = [
+                job_id for job_id, job in self._jobs.items()
+                if self._matches_session(job, session_id)
+            ]
+            for job_id in matching:
+                job = self._jobs[job_id]
+                if job.status in {"queued", "running"}:
+                    job.status = "cancel_requested"
+                self._jobs.pop(job_id, None)
+                if job_id in self._order:
+                    self._order.remove(job_id)
+            return len(matching)
+
     def _run_job(self, job_id: str, runner: JobRunner) -> None:
         if not self._mark_started(job_id):
             return

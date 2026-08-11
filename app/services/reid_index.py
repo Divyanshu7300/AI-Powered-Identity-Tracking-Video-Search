@@ -28,7 +28,7 @@ class ReIDIndexStats:
 
 
 class ReIDEmbeddingIndex:
-    def __init__(self) -> None:
+    def __init__(self, persist_dir=None) -> None:
         self._matrix = np.empty((0, 0), dtype=np.float32)
         self._memory_ids: List[str] = []
         self._memories: Dict[str, Dict[str, object]] = {}

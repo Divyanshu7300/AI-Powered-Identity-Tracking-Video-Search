@@ -65,7 +65,7 @@ class TrackClipExporter:
         return {
             "memory_id": memory["memory_id"],
             "clip_path": str(output_path),
-            "clip_url": f"/clips/{output_path.name}",
+            "clip_url": f"/media/clips/{output_path.name}",
             "frames_exported": frames_exported,
             "start_frame": start_frame,
             "end_frame": current_frame - 1,
@@ -91,14 +91,24 @@ class TrackClipExporter:
         timeline: Dict[int, Dict[str, object]],
         frame_index: int,
     ) -> Dict[str, object] | None:
-        if not timeline:
+        exact = timeline.get(frame_index)
+        if exact:
+            return exact
+
+        # Interpolate only *between* two nearby sightings. This keeps the focus box
+        # continuous for skipped detector frames, but never carries it before the
+        # first sighting or after the last one (where it previously lingered).
+        previous = max((index for index in timeline if index < frame_index), default=None)
+        following = min((index for index in timeline if index > frame_index), default=None)
+        if previous is None or following is None or following - previous > 20:
             return None
-        if frame_index in timeline:
-            return timeline[frame_index]
-        earlier_frames = [index for index in timeline if index <= frame_index]
-        if earlier_frames:
-            return timeline[max(earlier_frames)]
-        return timeline[min(timeline)]
+        before, after = timeline[previous], timeline[following]
+        before_box, after_box = before.get("bbox"), after.get("bbox")
+        if not before_box or not after_box:
+            return None
+        progress = (frame_index - previous) / (following - previous)
+        bbox = [round(float(left) + (float(right) - float(left)) * progress) for left, right in zip(before_box, after_box)]
+        return {"bbox": bbox, "timestamp_seconds": before.get("timestamp_seconds")}
 
     def _draw_track_context(
         self,
@@ -106,11 +116,9 @@ class TrackClipExporter:
         memory: Dict[str, object],
         timeline_item: Dict[str, object] | None,
     ):
-        bbox = None
-        if timeline_item:
-            bbox = timeline_item.get("bbox")
-        if bbox is None:
-            bbox = memory.get("latest_bbox")
+        # No nearby timeline observation means the subject is no longer visible.
+        # Keep the source frame clean instead of drawing a stale location.
+        bbox = timeline_item.get("bbox") if timeline_item else None
         if not bbox:
             return frame
 
@@ -121,21 +129,51 @@ class TrackClipExporter:
         if x2 <= x1 or y2 <= y1:
             return frame
 
-        cv2.rectangle(frame, (x1, y1), (x2, y2), (52, 226, 197), 3)
-        label = f"Track {memory.get('track_id')}"
+        accent = (255, 194, 0)  # electric cyan in BGR
+        label_background = (35, 29, 20)
+        label_text = (255, 248, 245)
+        corner_length = max(1, min(28, (x2 - x1) // 3, (y2 - y1) // 3))
+        thickness = 3
+
+        # A translucent focus area plus four bracket corners keeps the person clear
+        # without hiding details behind a heavy full rectangle.
+        overlay = frame.copy()
+        cv2.rectangle(overlay, (x1, y1), (x2, y2), accent, -1)
+        cv2.addWeighted(overlay, 0.10, frame, 0.90, 0, frame)
+        for start, end in (
+            ((x1, y1), (x1 + corner_length, y1)),
+            ((x1, y1), (x1, y1 + corner_length)),
+            ((x2, y1), (x2 - corner_length, y1)),
+            ((x2, y1), (x2, y1 + corner_length)),
+            ((x1, y2), (x1 + corner_length, y2)),
+            ((x1, y2), (x1, y2 - corner_length)),
+            ((x2, y2), (x2 - corner_length, y2)),
+            ((x2, y2), (x2, y2 - corner_length)),
+        ):
+            cv2.line(frame, start, end, accent, thickness, cv2.LINE_AA)
+
+        label = f"MATCH | ID {memory.get('track_id')}"
         timestamp = None
         if timeline_item:
             timestamp = timeline_item.get("timestamp_seconds")
         if timestamp is not None:
-            label = f"{label} {timestamp}s"
+            label = f"{label} | {timestamp}s"
+        (text_width, text_height), baseline = cv2.getTextSize(
+            label, cv2.FONT_HERSHEY_DUPLEX, 0.55, 1
+        )
+        label_y2 = max(text_height + baseline + 12, y1)
+        label_y1 = max(0, label_y2 - text_height - baseline - 12)
+        cv2.rectangle(frame, (x1, label_y1), (min(width - 1, x1 + text_width + 18), label_y2), label_background, -1)
+        cv2.rectangle(frame, (x1, label_y1), (x1 + 4, label_y2), accent, -1)
         cv2.putText(
             frame,
             label,
-            (x1, max(22, y1 - 8)),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.65,
-            (52, 226, 197),
-            2,
+            (x1 + 10, label_y2 - baseline - 6),
+            cv2.FONT_HERSHEY_DUPLEX,
+            0.55,
+            label_text,
+            1,
+            cv2.LINE_AA,
         )
         return frame
 

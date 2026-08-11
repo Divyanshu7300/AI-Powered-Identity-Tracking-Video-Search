@@ -8,7 +8,7 @@ from scipy.optimize import linear_sum_assignment
 
 from tracking.matcher import hungarian_match
 from tracking.matcher import compute_iou
-from tracking.matcher import cosine_distance
+from tracking.matcher import track_appearance_distance
 from tracking.matcher import normalized_center_distance
 from tracking.matcher import shape_change_cost
 
@@ -20,6 +20,7 @@ class Track:
     confidence: float
     embedding: np.ndarray
     source_name: str = "default"
+    source_label: str = "default"
     hits: int = 1
     age: int = 0
     missed: int = 0
@@ -30,6 +31,7 @@ class Track:
     metadata: Dict[str, object] = field(default_factory=dict)
     timeline: List[Dict[str, object]] = field(default_factory=list)
     embedding_gallery: List[np.ndarray] = field(default_factory=list)
+    face_gallery: List[np.ndarray] = field(default_factory=list)
     timeline_limit: int = 180
 
     def __post_init__(self) -> None:
@@ -112,6 +114,7 @@ class Track:
             "age": self.age,
             "missed": self.missed,
             "source_name": self.source_name,
+            "source_label": self.source_label,
             "first_frame": self.first_frame,
             "last_frame": self.last_frame,
             "best_confidence": round(float(self.best_confidence), 4),
@@ -119,12 +122,21 @@ class Track:
             "crop_url": self.metadata.get("crop_url"),
             "best_crop_url": self.metadata.get("best_crop_url"),
             "evidence_url": self.metadata.get("evidence_url"),
+            "face_template_count": len(self.face_gallery),
         }
 
     def embedding_candidates(self) -> np.ndarray:
         candidates = list(self.embedding_gallery)
         candidates.append(self.embedding)
         return np.vstack([self._normalized_embedding(candidate) for candidate in candidates])
+
+    def add_face_sample(self, embedding: np.ndarray, max_samples: int = 5) -> None:
+        sample = self._normalized_embedding(embedding)
+        if sample.size == 0:
+            return
+        if not self.face_gallery or max(float(np.dot(sample, value)) for value in self.face_gallery) < 0.985:
+            self.face_gallery.append(sample)
+        self.face_gallery = self.face_gallery[-max_samples:]
 
     def _add_embedding_sample(self, embedding: np.ndarray, max_samples: int = 8) -> None:
         sample = self._normalized_embedding(embedding)
@@ -154,14 +166,15 @@ class Track:
 class MultiObjectTracker:
     def __init__(
         self,
-        max_missed: int = 18,
+        max_missed: int = 60,
         min_hits: int = 2,
         match_threshold: float = 0.58,
-        appearance_weight: float = 0.35,
-        reid_match_threshold: float = 0.22,
+        appearance_weight: float = 0.65,
+        reid_match_threshold: float = 0.32,
         reid_max_age: int = 900,
         timeline_limit: int = 180,
         source_name: str = "default",
+        source_label: str | None = None,
     ) -> None:
         self.max_missed = max_missed
         self.min_hits = min_hits
@@ -171,6 +184,7 @@ class MultiObjectTracker:
         self.reid_max_age = reid_max_age
         self.timeline_limit = max(1, int(timeline_limit))
         self.source_name = source_name
+        self.source_label = source_label or source_name
         self.tracks: List[Track] = []
         self.track_registry: Dict[int, Track] = {}
         self.next_track_id = 1
@@ -269,7 +283,7 @@ class MultiObjectTracker:
         for track_idx, track in enumerate(inactive_tracks):
             for local_det_idx, det_idx in enumerate(det_indices):
                 detection = detections[det_idx]
-                appearance_cost = cosine_distance(track.embedding, embeddings[det_idx])
+                appearance_cost = track_appearance_distance(track, embeddings[det_idx])
                 if appearance_cost > self.reid_match_threshold:
                     continue
 
@@ -355,6 +369,7 @@ class MultiObjectTracker:
                 confidence=detection["confidence"],
                 embedding=embeddings[det_idx],
                 source_name=self.source_name,
+                source_label=self.source_label,
                 first_frame=self.frame_index,
                 last_frame=self.frame_index,
                 timeline_limit=self.timeline_limit,
@@ -396,6 +411,7 @@ class MultiObjectTracker:
                     "memory_id": f"{track.source_name}:{track.track_id}",
                     "track_id": track.track_id,
                     "source_name": track.source_name,
+                    "source_label": track.source_label,
                     "first_frame": track.first_frame,
                     "last_frame": track.last_frame,
                     "duration_frames": duration_frames,

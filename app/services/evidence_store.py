@@ -76,6 +76,11 @@ class EvidenceStore:
             color=(52, 226, 197),
         )
 
+    def save_observation_crop(self, observation_id: str, crop: np.ndarray) -> str:
+        """Persist the exact crop used for semantic indexing and later re-indexing."""
+        filename = self._safe_filename(f"{observation_id}_crop.jpg")
+        return self._write_crop(filename, crop)
+
     def clear_source(self, source_name: str) -> None:
         """Remove generated crops and evidence from a source before a rerun."""
         prefix = f"{self._safe_filename(source_name)}_"
@@ -84,9 +89,32 @@ class EvidenceStore:
                 if path.is_file() and path.name.startswith(prefix):
                     path.unlink(missing_ok=True)
 
+    def clear_track(self, memory_id: str) -> None:
+        safe = self._safe_filename(memory_id)
+        for directory in (self.crops_dir, self.evidence_dir):
+            for path in directory.iterdir():
+                if path.is_file() and safe in path.name:
+                    path.unlink(missing_ok=True)
+
+    def clear_all(self) -> None:
+        """Purge all stored crop images and evidence frames."""
+        for directory in (self.crops_dir, self.evidence_dir):
+            if directory.exists():
+                for path in directory.iterdir():
+                    if path.is_file():
+                        path.unlink(missing_ok=True)
+
+    def delete_evidence_url(self, evidence_url: str) -> None:
+        """Delete one generated evidence frame without accepting arbitrary paths."""
+        if not evidence_url:
+            return
+        path = self.evidence_dir / Path(str(evidence_url)).name
+        if path.is_file():
+            path.unlink(missing_ok=True)
+
     def _write_crop(self, filename: str, crop: np.ndarray) -> str:
         cv2.imwrite(str(self.crops_dir / filename), crop)
-        return f"/crops/{filename}"
+        return f"/media/crops/{filename}"
 
     def _write_framed_image(
         self,
@@ -101,7 +129,7 @@ class EvidenceStore:
         cv2.rectangle(canvas, (x1, y1), (x2, y2), color, 3)
         cv2.putText(canvas, label, (x1, max(20, y1 - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
         cv2.imwrite(str(self.evidence_dir / filename), canvas)
-        return f"/evidence/{filename}"
+        return f"/media/evidence/{filename}"
 
     @staticmethod
     def _safe_filename(name: str) -> str:

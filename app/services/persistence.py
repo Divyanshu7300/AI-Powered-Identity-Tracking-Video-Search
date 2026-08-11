@@ -134,6 +134,20 @@ class TrackPersistenceStore:
             ).fetchone()
         return json.loads(row["payload_json"]) if row else None
 
+    def delete_memory(self, memory_id: str) -> None:
+        with self._connect() as conn:
+            conn.execute("delete from track_memories where memory_id = ?", (memory_id,))
+            self.cleanup_orphan_embeddings(conn)
+
+    def clear_all(self) -> None:
+        """Purge all stored sources, track memories, and embedding files."""
+        with self._connect() as conn:
+            conn.execute("delete from track_memories")
+            conn.execute("delete from sources")
+        if self.embeddings_dir.exists():
+            for path in self.embeddings_dir.glob("*.npy"):
+                path.unlink(missing_ok=True)
+
     def update_memory_fields(self, memory_id: str, fields: Dict[str, object]) -> Dict[str, object] | None:
         memory = self.get_memory(memory_id)
         if memory is None:

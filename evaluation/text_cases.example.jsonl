@@ -1,0 +1,5 @@
+# Copy to text_cases.jsonl and replace the IDs after processing your video.
+{"query":"person wearing blue shirt", "expected_memory_id":"your-video-id:7"}
+{"query":"person with backpack near left", "expected_memory_id":"your-video-id:3"}
+{"query":"person with umbrella", "expected_memory_id":"__no_match__"}
+{"query":"person wearing red shirt near right", "expected_memory_id":"__no_match__"}

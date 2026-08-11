@@ -1,617 +1,211 @@
 "use client";
 
-import Image from "next/image";
-import { useEffect, useMemo, useRef, useState } from "react";
+import React from "react";
+import Link from "next/link";
+import {
+  CpuIcon,
+  SearchIcon,
+  VideoIcon,
+  LayersIcon,
+  SparklesIcon,
+  SettingsIcon,
+  DashboardIcon,
+  UploadIcon,
+} from "./components/Icons";
 
-const DEFAULT_TEXT_QUERY = "person wearing blue clothing near center middle";
-const PLACEHOLDER_IMAGE = "data:image/gif;base64,R0lGODlhAQABAAAAACw=";
+const MODELS = [
+  {
+    name: "YOLOv8 Detection",
+    badge: "Detection Engine",
+    icon: CpuIcon,
+    accent: "text-amber-600 bg-amber-50",
+    desc: "Real-time person bounding box localization & frame sampling.",
+  },
+  {
+    name: "DeepSORT Tracking",
+    badge: "Track Memory",
+    icon: LayersIcon,
+    accent: "text-sky-600 bg-sky-50",
+    desc: "Multi-frame trajectory association & keyframe crop indexing.",
+  },
+  {
+    name: "SigLIP / CLIP Engine",
+    badge: "768-dim Vision Vectors",
+    icon: SparklesIcon,
+    accent: "text-indigo-600 bg-indigo-50",
+    desc: "Zero-shot text description search & visual crop Re-ID matching.",
+  },
+  {
+    name: "LLM RAG & Evidence",
+    badge: "Evidence RAG",
+    icon: SearchIcon,
+    accent: "text-emerald-600 bg-emerald-50",
+    desc: "Natural language query breakdown & automated MP4 clip exports.",
+  },
+];
 
-function mediaUrl(path) {
-  if (!path) return PLACEHOLDER_IMAGE;
-  if (/^https?:\/\//i.test(path)) return path;
-  return `/api${path.startsWith("/") ? path : `/${path}`}`;
-}
+const MODULE_LINKS = [
+  {
+    href: "/dashboard",
+    title: "Overview Dashboard",
+    desc: "Platform health, system metrics & active pipeline jobs.",
+    icon: DashboardIcon,
+    accent: "text-indigo-600 bg-indigo-50",
+  },
+  {
+    href: "/pipeline",
+    title: "Ingestion Pipeline",
+    desc: "Upload surveillance videos & configure YOLOv8 detection.",
+    icon: CpuIcon,
+    accent: "text-amber-600 bg-amber-50",
+  },
+  {
+    href: "/search",
+    title: "AI Search Engine",
+    desc: "Query subjects via text descriptions or visual reference crops.",
+    icon: SearchIcon,
+    accent: "text-violet-600 bg-violet-50",
+  },
+  {
+    href: "/surveillance",
+    title: "Surveillance Player",
+    desc: "Watch video feeds with live detection overlays & inspect tracks.",
+    icon: VideoIcon,
+    accent: "text-emerald-600 bg-emerald-50",
+  },
+  {
+    href: "/tracks",
+    title: "Track Library",
+    desc: "Browse indexed person memories & export video evidence.",
+    icon: LayersIcon,
+    accent: "text-sky-600 bg-sky-50",
+  },
+  {
+    href: "/settings",
+    title: "Engine Settings",
+    desc: "Toggle SigLIP vision engine & manage vector search indices.",
+    icon: SettingsIcon,
+    accent: "text-slate-600 bg-slate-100",
+  },
+];
 
-async function readJson(response) {
-  const text = await response.text();
-  try {
-    return text ? JSON.parse(text) : {};
-  } catch {
-    return { message: text || response.statusText };
-  }
-}
-
-export default function Home() {
-  const [health, setHealth] = useState("checking");
-  const [dashboard, setDashboard] = useState(null);
-  const [tracks, setTracks] = useState([]);
-  const [selectedTrack, setSelectedTrack] = useState(null);
-  const [videoFile, setVideoFile] = useState(null);
-  const [queryFile, setQueryFile] = useState(null);
-  const [detectorModel, setDetectorModel] = useState("yolov8n.pt");
-  const [frameStride, setFrameStride] = useState(2);
-  const [textQuery, setTextQuery] = useState(DEFAULT_TEXT_QUERY);
-  const [textResults, setTextResults] = useState(null);
-  const [imageResults, setImageResults] = useState(null);
-  const [runResult, setRunResult] = useState(null);
-  const [jobs, setJobs] = useState([]);
-  const [activeJobId, setActiveJobId] = useState("");
-  const [busy, setBusy] = useState("");
-  const [notice, setNotice] = useState("");
-  const [error, setError] = useState("");
-  const fileInputRef = useRef(null);
-  const imageInputRef = useRef(null);
-  const sessionIdRef = useRef("");
-
-  function getSessionId() {
-    if (sessionIdRef.current) return sessionIdRef.current;
-    const storageKey = "mot-reid-session-id";
-    const stored = window.localStorage.getItem(storageKey);
-    const nextId = stored || crypto.randomUUID();
-    if (!stored) window.localStorage.setItem(storageKey, nextId);
-    sessionIdRef.current = nextId;
-    return nextId;
-  }
-
-  function apiFetch(path, options = {}) {
-    const headers = new Headers(options.headers || {});
-    headers.set("x-session-id", getSessionId());
-    return fetch(path, { ...options, headers });
-  }
-
-  const overview = dashboard?.overview || {};
-  const semanticStatus = dashboard?.semantic_status || {};
-  const reidStatus = dashboard?.reid_status || {};
-  const topTracks = dashboard?.tracker?.top_tracks || [];
-
-  const selectedMemory = useMemo(() => {
-    if (!selectedTrack) return tracks[0] || null;
-    return tracks.find((track) => track.memory_id === selectedTrack) || tracks[0] || null;
-  }, [selectedTrack, tracks]);
-
-  async function loadDashboard() {
-    try {
-      const [healthResponse, dashboardResponse, tracksResponse, jobsResponse] = await Promise.all([
-        apiFetch("/api/health", { cache: "no-store" }),
-        apiFetch("/api/tracking/analytics/dashboard", { cache: "no-store" }),
-        apiFetch("/api/tracking/analytics/tracks", { cache: "no-store" }),
-        apiFetch("/api/tracking/jobs", { cache: "no-store" }),
-      ]);
-      setHealth(healthResponse.ok ? "online" : "offline");
-      if (dashboardResponse.ok) setDashboard(await dashboardResponse.json());
-      if (tracksResponse.ok) {
-        const payload = await tracksResponse.json();
-        setTracks(payload.track_memories || []);
-      }
-      if (jobsResponse.ok) {
-        const payload = await jobsResponse.json();
-        setJobs(payload.jobs || []);
-      }
-    } catch (err) {
-      setHealth("offline");
-      setError(err.message || "Unable to reach backend.");
-    }
-  }
-
-  useEffect(() => {
-    Promise.resolve().then(loadDashboard);
-    const id = setInterval(loadDashboard, 5000);
-    return () => clearInterval(id);
-  }, []);
-
-  useEffect(() => {
-    if (!activeJobId) return undefined;
-    let cancelled = false;
-
-    async function pollJob() {
-      try {
-        const response = await apiFetch(`/api/tracking/jobs/${activeJobId}`, { cache: "no-store" });
-        const payload = await readJson(response);
-        if (!response.ok) throw new Error(payload.detail || payload.message || "Unable to load job.");
-        if (cancelled) return;
-        setJobs((current) => {
-          const rest = current.filter((job) => job.job_id !== payload.job_id);
-          return [payload, ...rest];
-        });
-        if (payload.status === "completed") {
-          setRunResult(payload.result);
-          setNotice(`Processed ${payload.result?.sampled_frames_processed || 0} sampled frames.`);
-          setBusy("");
-          setActiveJobId("");
-          awaitDashboardRefresh();
-        } else if (payload.status === "failed" || payload.status === "canceled") {
-          setError(payload.error || "Video processing failed.");
-          setBusy("");
-          setActiveJobId("");
-          awaitDashboardRefresh();
-        }
-      } catch (err) {
-        if (!cancelled) setError(err.message);
-      }
-    }
-
-    function awaitDashboardRefresh() {
-      Promise.resolve().then(loadDashboard);
-    }
-
-    pollJob();
-    const id = setInterval(pollJob, 1500);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, [activeJobId]);
-
-  async function uploadVideo(event) {
-    event.preventDefault();
-    if (!videoFile) {
-      setError("Select a video before running the pipeline.");
-      return;
-    }
-    setBusy("upload");
-    setError("");
-    setNotice("Processing video. This can take a while.");
-    const formData = new FormData();
-    formData.append("file", videoFile);
-    formData.append("detector_model", detectorModel);
-    formData.append("frame_stride", String(frameStride));
-    try {
-      const response = await apiFetch("/api/tracking/upload", {
-        method: "POST",
-        body: formData,
-      });
-      const payload = await readJson(response);
-      if (!response.ok) throw new Error(payload.detail || payload.message || "Upload failed.");
-      setJobs((current) => [payload, ...current.filter((job) => job.job_id !== payload.job_id)]);
-      setActiveJobId(payload.job_id);
-      setNotice("Job queued. Progress will update here.");
-      await loadDashboard();
-    } catch (err) {
-      setError(err.message);
-      setBusy("");
-    }
-  }
-
-  async function searchByText(event) {
-    event.preventDefault();
-    setBusy("text");
-    setError("");
-    try {
-      const response = await apiFetch("/api/tracking/search/text", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query: textQuery, top_k: 8 }),
-      });
-      const payload = await readJson(response);
-      if (!response.ok) throw new Error(payload.detail || payload.message || "Text search failed.");
-      setTextResults(payload);
-      setNotice(payload.message || "Text search complete.");
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setBusy("");
-    }
-  }
-
-  async function searchByImage(event) {
-    event.preventDefault();
-    if (!queryFile) {
-      setError("Select a query image first.");
-      return;
-    }
-    setBusy("image");
-    setError("");
-    const formData = new FormData();
-    formData.append("file", queryFile);
-    try {
-      const response = await apiFetch("/api/tracking/search?top_k=8", {
-        method: "POST",
-        body: formData,
-      });
-      const payload = await readJson(response);
-      if (!response.ok) throw new Error(payload.detail || payload.message || "Image search failed.");
-      setImageResults(payload);
-      setNotice("Image search complete.");
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setBusy("");
-    }
-  }
-
-  async function exportClip(memoryId) {
-    setBusy(`clip:${memoryId}`);
-    setError("");
-    try {
-      const response = await apiFetch(`/api/tracking/clips/${encodeURIComponent(memoryId)}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ padding_frames: 0 }),
-      });
-      const payload = await readJson(response);
-      if (!response.ok) throw new Error(payload.detail || payload.message || "Clip export failed.");
-      setNotice(`Clip exported for ${memoryId}.`);
-      await loadDashboard();
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setBusy("");
-    }
-  }
-
-  async function updateJob(jobId, action) {
-    setError("");
-    try {
-      const response = await apiFetch(`/api/tracking/jobs/${jobId}/${action}`, { method: "POST" });
-      const payload = await readJson(response);
-      if (!response.ok) throw new Error(payload.detail || payload.message || `Job ${action} failed.`);
-      setJobs((current) => [payload, ...current.filter((job) => job.job_id !== payload.job_id)]);
-      if (action === "retry") {
-        setActiveJobId(payload.job_id);
-        setBusy("upload");
-        setNotice("Retry queued. Progress will update here.");
-      } else {
-        setNotice(payload.progress?.message || `Job ${action} requested.`);
-      }
-      await loadDashboard();
-    } catch (err) {
-      setError(err.message);
-    }
-  }
-
-  async function deleteJob(jobId) {
-    setError("");
-    try {
-      const response = await apiFetch(`/api/tracking/jobs/${jobId}`, { method: "DELETE" });
-      const payload = await readJson(response);
-      if (!response.ok) throw new Error(payload.detail || payload.message || "Delete job failed.");
-      setJobs((current) => current.filter((job) => job.job_id !== jobId));
-      if (activeJobId === jobId) setActiveJobId("");
-      setNotice("Job removed from history.");
-    } catch (err) {
-      setError(err.message);
-    }
-  }
-
+export default function HomePage() {
   return (
-    <main className="shell">
-      <section className="topbar">
-        <div>
-          <p className="eyebrow">MOT + Re-ID Video Search</p>
-          <h1>Video memory dashboard</h1>
-        </div>
-        <div className={`status ${health}`}>
-          <span />
-          {health}
-        </div>
-      </section>
+    <div className="relative app-page w-full animate-fade-in">
+      {/* Full-bleed ambient gradient wash */}
+      <div className="pointer-events-none absolute -top-40 -right-20 w-[600px] h-[600px] rounded-full bg-gradient-to-br from-indigo-200/50 via-purple-200/35 to-transparent blur-3xl opacity-70" />
 
-      {(notice || error) && (
-        <section className={`notice ${error ? "error" : ""}`}>
-          {error || notice}
-        </section>
-      )}
-
-      <section className="metrics" aria-label="Dashboard metrics">
-        <Metric label="Track memories" value={overview.indexed_track_memories ?? 0} />
-        <Metric label="Sources" value={overview.sources_processed ?? 0} />
-        <Metric label="Semantic observations" value={overview.semantic_observations ?? 0} />
-        <Metric label="Active tracks" value={overview.active_tracks ?? 0} />
-        <Metric label="Frames processed" value={overview.frames_processed ?? 0} />
-        <Metric label="CLIP" value={semanticStatus.clip_ready ? "ready" : "fallback"} />
-        <Metric label="Re-ID" value={reidStatus.backend || "not loaded"} />
-      </section>
-
-      <section className="workspace">
-        <div className="left-rail">
-          <form className="panel" onSubmit={uploadVideo}>
-            <div className="panel-head">
-              <h2>Run video</h2>
-              <button className="icon-button" type="button" title="Refresh" onClick={loadDashboard}>
-                R
-              </button>
-            </div>
-            <input
-              ref={fileInputRef}
-              className="hidden-input"
-              type="file"
-              accept="video/*"
-              onChange={(event) => setVideoFile(event.target.files?.[0] || null)}
-            />
-            <button className="file-picker" type="button" onClick={() => fileInputRef.current?.click()}>
-              <span>{videoFile ? videoFile.name : "Choose video"}</span>
-            </button>
-            <label>
-              Detector
-              <select value={detectorModel} onChange={(event) => setDetectorModel(event.target.value)}>
-                <option value="yolov8n.pt">yolov8n.pt</option>
-                <option value="yolov8s.pt">yolov8s.pt</option>
-              </select>
-            </label>
-            <label>
-              Frame stride
-              <input
-                type="number"
-                min="1"
-                max="30"
-                value={frameStride}
-                onChange={(event) => setFrameStride(Math.max(1, Number(event.target.value) || 1))}
-              />
-            </label>
-            <button className="primary" disabled={busy === "upload"} type="submit">
-              {busy === "upload" ? "Queued..." : "Run pipeline"}
-            </button>
-          </form>
-
-          <JobProgress
-            jobs={jobs}
-            activeJobId={activeJobId}
-            onCancel={(jobId) => updateJob(jobId, "cancel")}
-            onDelete={deleteJob}
-            onRetry={(jobId) => updateJob(jobId, "retry")}
-            onSelect={setActiveJobId}
-          />
-
-          <form className="panel" onSubmit={searchByText}>
-            <div className="panel-head">
-              <h2>Text search</h2>
-            </div>
-            <textarea value={textQuery} onChange={(event) => setTextQuery(event.target.value)} />
-            <button className="primary" disabled={busy === "text"} type="submit">
-              {busy === "text" ? "Searching..." : "Search text"}
-            </button>
-          </form>
-
-          <form className="panel" onSubmit={searchByImage}>
-            <div className="panel-head">
-              <h2>Image search</h2>
-            </div>
-            <input
-              ref={imageInputRef}
-              className="hidden-input"
-              type="file"
-              accept="image/*"
-              onChange={(event) => setQueryFile(event.target.files?.[0] || null)}
-            />
-            <button className="file-picker" type="button" onClick={() => imageInputRef.current?.click()}>
-              <span>{queryFile ? queryFile.name : "Choose person image"}</span>
-            </button>
-            <button className="primary" disabled={busy === "image"} type="submit">
-              {busy === "image" ? "Searching..." : "Search image"}
-            </button>
-          </form>
-        </div>
-
-        <section className="main-grid">
-          <div className="panel output-panel">
-            <div className="panel-head">
-              <h2>Latest output</h2>
-              {runResult?.output_url && (
-                <a href={mediaUrl(runResult.output_url)} target="_blank" rel="noreferrer">
-                  Open
-                </a>
-              )}
-            </div>
-            {runResult?.output_url ? (
-              <video controls src={mediaUrl(runResult.output_url)} />
-            ) : (
-              <div className="empty-state">Run a video to preview the annotated output.</div>
-            )}
-          </div>
-
-          <div className="panel">
-            <div className="panel-head">
-              <h2>Track memories</h2>
-              <span>{tracks.length}</span>
-            </div>
-            <div className="track-list">
-              {tracks.map((track) => (
-                <button
-                  className={`track-row ${selectedMemory?.memory_id === track.memory_id ? "selected" : ""}`}
-                  key={track.memory_id}
-                  type="button"
-                  onClick={() => setSelectedTrack(track.memory_id)}
-                >
-                  <EvidenceImage src={track.best_crop_url || track.crop_url} width={56} height={56} />
-                  <span>
-                    <strong>{track.memory_id}</strong>
-                    <small>{track.hits} sightings | conf {track.best_confidence}</small>
-                  </span>
-                </button>
-              ))}
-              {!tracks.length && <div className="empty-state compact">No memories indexed yet.</div>}
-            </div>
-          </div>
-
-          <TrackDetail track={selectedMemory} busy={busy} onExport={exportClip} />
-          <ResultsPanel title="Text matches" payload={textResults} />
-          <ResultsPanel title="Image matches" payload={imageResults} />
-          <TopTracks tracks={topTracks} />
-        </section>
-      </section>
-    </main>
-  );
-}
-
-function Metric({ label, value }) {
-  return (
-    <div className="metric">
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </div>
-  );
-}
-
-function JobProgress({ jobs, activeJobId, onCancel, onDelete, onRetry, onSelect }) {
-  const activeJob = jobs.find((job) => job.job_id === activeJobId) || jobs[0] || null;
-  const progress = activeJob?.progress || {};
-  const percent = Number(progress.percent || 0);
-  const isLive = activeJob && ["queued", "running", "cancel_requested"].includes(activeJob.status);
-  const isFinished = activeJob && ["completed", "failed", "canceled"].includes(activeJob.status);
-
-  return (
-    <div className="panel">
-      <div className="panel-head">
-        <h2>Job progress</h2>
-        <span className={`job-pill ${activeJob?.status || "idle"}`}>{activeJob?.status || "idle"}</span>
-      </div>
-      {activeJob ? (
-        <>
-          <div className="progress-track" aria-label="Video processing progress">
-            <span style={{ width: `${Math.max(0, Math.min(100, percent))}%` }} />
-          </div>
-          <div className="progress-meta">
-            <strong>{Math.round(percent)}%</strong>
-            <small>
-              {progress.frames_processed || 0}
-              {progress.total_frames ? ` / ${progress.total_frames}` : ""} frames
-            </small>
-          </div>
-          <p className="message">{activeJob.error || progress.message || "Waiting for progress."}</p>
-          <div className="job-actions">
-            {isLive && (
-              <button className="secondary" type="button" onClick={() => onCancel(activeJob.job_id)}>
-                Cancel
-              </button>
-            )}
-            {isFinished && (
-              <button className="secondary" type="button" onClick={() => onRetry(activeJob.job_id)}>
-                Retry
-              </button>
-            )}
-            {isFinished && (
-              <button className="secondary danger-button" type="button" onClick={() => onDelete(activeJob.job_id)}>
-                Delete
-              </button>
-            )}
-          </div>
-          <div className="job-list">
-            {jobs.slice(0, 5).map((job) => (
-              <button
-                className={`job-row ${job.job_id === activeJob.job_id ? "selected" : ""}`}
-                key={job.job_id}
-                type="button"
-                onClick={() => onSelect(job.job_id)}
-              >
-                <span>{job.uploaded_filename || job.source_name}</span>
-                <small>{job.status}</small>
-              </button>
-            ))}
-          </div>
-          {isLive && <p className="message">Dashboard stays usable while this runs.</p>}
-        </>
-      ) : (
-        <div className="empty-state compact">No processing jobs yet.</div>
-      )}
-    </div>
-  );
-}
-
-function TrackDetail({ track, busy, onExport }) {
-  if (!track) {
-    return (
-      <div className="panel detail-panel">
-        <div className="empty-state">Select a track to inspect evidence and export clips.</div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="panel detail-panel">
-      <div className="panel-head">
-        <h2>{track.memory_id}</h2>
-        <button
-          className="secondary"
-          disabled={busy === `clip:${track.memory_id}`}
-          type="button"
-          onClick={() => onExport(track.memory_id)}
-        >
-          {busy === `clip:${track.memory_id}` ? "Exporting..." : "Export clip"}
-        </button>
-      </div>
-      <div className="detail-body">
-        <EvidenceImage src={track.evidence_url || track.best_crop_url || track.crop_url} width={220} height={165} />
-        <dl>
-          <div>
-            <dt>Frames</dt>
-            <dd>{track.first_frame} - {track.last_frame}</dd>
-          </div>
-          <div>
-            <dt>Visible</dt>
-            <dd>{track.visible_duration_seconds ?? track.duration_frames}</dd>
-          </div>
-          <div>
-            <dt>Best confidence</dt>
-            <dd>{track.best_confidence}</dd>
-          </div>
-          <div>
-            <dt>Activity</dt>
-            <dd>{track.episode?.activity || "tracked person"}</dd>
-          </div>
-        </dl>
-      </div>
-      {track.clip_url && (
-        <a className="clip-link" href={mediaUrl(track.clip_url)} target="_blank" rel="noreferrer">
-          Open exported clip
-        </a>
-      )}
-    </div>
-  );
-}
-
-function ResultsPanel({ title, payload }) {
-  const matches = payload?.matches || [];
-  return (
-    <div className="panel">
-      <div className="panel-head">
-        <h2>{title}</h2>
-        <span>{matches.length}</span>
-      </div>
-      {payload?.message && <p className="message">{payload.message}</p>}
-      <div className="result-list">
-        {matches.map((match) => (
-          <div className="result-row" key={`${title}-${match.memory_id}`}>
-            <EvidenceImage src={match.frame_url || match.best_crop_url || match.crop_url} width={56} height={56} />
-            <span>
-              <strong>{match.memory_id}</strong>
-              <small>score {match.score ?? match.similarity ?? "n/a"}</small>
-              {match.caption && <em>{match.caption}</em>}
+      <div className="relative app-container space-y-10">
+        {/* Hero Section — Clean & Concise */}
+        <section className="text-center pt-2 pb-2 space-y-5 max-w-3xl mx-auto">
+          <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-indigo-50 border border-indigo-200/80 shadow-xs">
+            <span className="relative flex h-2 w-2">
+              <span className="absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75 animate-ping" />
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-indigo-500" />
+            </span>
+            <span className="text-xs font-semibold tracking-wide text-indigo-700 uppercase">
+              AI Identity Tracking &amp; Video Search
             </span>
           </div>
-        ))}
-        {!matches.length && <div className="empty-state compact">No matches yet.</div>}
-      </div>
-    </div>
-  );
-}
 
-function EvidenceImage({ src, width, height }) {
-  return (
-    <Image
-      alt=""
-      height={height}
-      src={mediaUrl(src)}
-      unoptimized
-      width={width}
-    />
-  );
-}
+          <h1 className="text-3xl sm:text-4xl font-bold tracking-tight text-zinc-900 leading-tight">
+            Multimodal Video Intelligence Engine
+          </h1>
 
-function TopTracks({ tracks }) {
-  return (
-    <div className="panel">
-      <div className="panel-head">
-        <h2>Longest tracks</h2>
-      </div>
-      <div className="rank-list">
-        {tracks.map((track, index) => (
-          <div className="rank-row" key={track.memory_id || index}>
-            <strong>{index + 1}</strong>
-            <span>{track.memory_id}</span>
-            <small>{track.duration_frames} frames</small>
+          <p className="text-sm sm:text-base text-zinc-600 leading-relaxed max-w-xl mx-auto font-normal">
+            Processes surveillance streams using YOLOv8 person detection, indexes 768-dim SigLIP visual embeddings, and retrieves evidence via natural language or crop Re-ID.
+          </p>
+
+          {/* Direct Workspace CTAs */}
+          <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
+            <Link
+              href="/dashboard"
+              className="bg-zinc-900 hover:bg-zinc-800 text-white font-semibold text-sm px-5 py-2.5 rounded-xl shadow-sm transition-all flex items-center gap-2"
+            >
+              <span>Launch Workspace</span>
+              <span className="text-zinc-400">→</span>
+            </Link>
+            <Link
+              href="/pipeline"
+              className="bg-white hover:bg-zinc-50 text-zinc-800 border border-zinc-200/80 font-medium text-sm px-4.5 py-2.5 rounded-xl shadow-xs transition-all flex items-center gap-2"
+            >
+              <UploadIcon className="w-4 h-4 text-amber-500" />
+              <span>Video Pipeline</span>
+            </Link>
+            <Link
+              href="/search"
+              className="bg-white hover:bg-zinc-50 text-zinc-800 border border-zinc-200/80 font-medium text-sm px-4.5 py-2.5 rounded-xl shadow-xs transition-all flex items-center gap-2"
+            >
+              <SearchIcon className="w-4 h-4 text-indigo-500" />
+              <span>AI Search</span>
+            </Link>
           </div>
-        ))}
-        {!tracks.length && <div className="empty-state compact">No ranked tracks yet.</div>}
+        </section>
+
+        {/* AI Model Stack — 4 Compact Cards */}
+        <section className="space-y-4">
+          <div className="flex items-center justify-between border-b border-zinc-100 pb-3">
+            <h2 className="text-base font-bold text-zinc-900">AI Engine Stack</h2>
+            <span className="text-xs text-zinc-400 font-medium">YOLOv8 + DeepSORT + SigLIP + LLM RAG</span>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            {MODELS.map((m, i) => {
+              const Icon = m.icon;
+              return (
+                <div key={i} className="app-surface p-4 space-y-2.5 hover:shadow-md transition-shadow">
+                  <div className="flex items-center justify-between">
+                    <div className={`w-8 h-8 rounded-xl ${m.accent} flex items-center justify-center shrink-0`}>
+                      <Icon className="w-4 h-4" />
+                    </div>
+                    <span className="text-[10px] font-semibold text-zinc-500 bg-zinc-100 px-2 py-0.5 rounded-full">
+                      {m.badge}
+                    </span>
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-semibold text-zinc-900">{m.name}</h3>
+                    <p className="text-xs text-zinc-500 mt-1 leading-relaxed font-normal">{m.desc}</p>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+
+        {/* Workspace Modules Navigation */}
+        <section className="space-y-4">
+          <div className="border-b border-zinc-100 pb-3">
+            <h2 className="text-base font-bold text-zinc-900">Platform Modules</h2>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {MODULE_LINKS.map((mod, i) => {
+              const Icon = mod.icon;
+              return (
+                <Link
+                  key={i}
+                  href={mod.href}
+                  className="app-surface p-4.5 hover:shadow-md hover:border-zinc-300 transition-all group flex items-start gap-3.5"
+                >
+                  <div className={`w-9 h-9 rounded-xl ${mod.accent} flex items-center justify-center shrink-0 mt-0.5`}>
+                    <Icon className="w-4 h-4" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between gap-1">
+                      <h3 className="text-sm font-semibold text-zinc-900 group-hover:text-indigo-600 transition-colors truncate">
+                        {mod.title}
+                      </h3>
+                      <span className="text-zinc-400 group-hover:text-zinc-900 group-hover:translate-x-0.5 transition-all text-xs font-bold shrink-0">
+                        →
+                      </span>
+                    </div>
+                    <p className="text-xs text-zinc-500 mt-1 leading-relaxed font-normal">{mod.desc}</p>
+                  </div>
+                </Link>
+              );
+            })}
+          </div>
+        </section>
       </div>
     </div>
   );

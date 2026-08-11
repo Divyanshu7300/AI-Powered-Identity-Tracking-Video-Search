@@ -54,6 +54,60 @@ class VideoRAGAnswerer:
             "evidence": evidence,
         }
 
+    def rewrite_search_query(self, query: str) -> Dict[str, object]:
+        """Improve phrasing for retrieval without inventing search constraints."""
+        original = str(query or "").strip()
+        fallback = {
+            "original_query": original, "search_query": original, "alternate_queries": [],
+            "ambiguities": [], "changed": False, "provider": "local",
+        }
+        if not original or not self.api_key:
+            return fallback
+        payload = {
+            "model": self.model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "Rewrite a video-person search query for visual retrieval. Preserve every explicit "
+                        "attribute, object, colour, location, and time constraint. Never add people, objects, "
+                        "colours, actions, or certainty. Return only JSON with search_query, alternate_queries "
+                        "(maximum two equivalent visual phrasings), and ambiguities (maximum three unclear terms)."
+                    ),
+                },
+                {"role": "user", "content": original},
+            ],
+            "temperature": 0,
+            "max_tokens": 120,
+            "response_format": {"type": "json_object"},
+        }
+        content = self._request_completion(payload)
+        if not content:
+            return fallback
+        try:
+            parsed = json.loads(content.strip().removeprefix("```json").removesuffix("```").strip())
+            rewritten = str(parsed.get("search_query") or "").strip()
+        except (json.JSONDecodeError, AttributeError):
+            return fallback
+        if not rewritten or len(rewritten) > 320:
+            return fallback
+        alternates = parsed.get("alternate_queries") if isinstance(parsed, dict) else []
+        ambiguities = parsed.get("ambiguities") if isinstance(parsed, dict) else []
+        alternate_queries = [
+            str(value).strip() for value in alternates
+            if isinstance(value, str) and 3 <= len(value.strip()) <= 200 and value.casefold() != rewritten.casefold()
+        ][:2] if isinstance(alternates, list) else []
+        ambiguity_list = [str(value).strip() for value in ambiguities if isinstance(value, str)][:3] if isinstance(ambiguities, list) else []
+        return {
+            "original_query": original,
+            "search_query": rewritten,
+            "alternate_queries": alternate_queries,
+            "ambiguities": ambiguity_list,
+            "changed": rewritten.casefold() != original.casefold(),
+            "provider": self.provider,
+            "model": self.model,
+        }
+
     def _build_evidence(self, matches: List[Dict[str, object]]) -> List[Dict[str, object]]:
         evidence: List[Dict[str, object]] = []
         for rank, match in enumerate(matches, start=1):
@@ -84,19 +138,31 @@ class VideoRAGAnswerer:
                 {
                     "role": "system",
                     "content": (
-                        "You answer surveillance video search questions using only the supplied evidence. "
-                        "Mention track IDs and timestamps when available. Say when evidence is insufficient."
+                        "You are a video surveillance AI intelligence assistant.\n"
+                        "Provide a direct, structured summary of retrieved video evidence.\n\n"
+                        "OUTPUT STRUCTURE:\n"
+                        "Track IDs: <number list>\n"
+                        "Time Range: <seconds range>\n"
+                        "- Key visual observation 1 (clothing, color, location)\n"
+                        "- Key visual observation 2 (confidence or distinction)\n\n"
+                        "RULES:\n"
+                        "1. Maximum 2-3 bullet points.\n"
+                        "2. Do NOT write long paragraphs.\n"
+                        "3. Do NOT list unmatched candidates one by one."
                     ),
                 },
                 {
                     "role": "user",
-                    "content": f"Query: {query}\n\nEvidence:\n{json.dumps(trimmed)}",
+                    "content": f"Query: {query}\n\nRetrieved Evidence:\n{json.dumps(trimmed)}",
                 },
             ],
-            "temperature": 0.2,
-            "max_tokens": 300,
+            "temperature": 0.1,
+            "max_tokens": 200,
         }
 
+        return self._request_completion(payload)
+
+    def _request_completion(self, payload: Dict[str, object]) -> str | None:
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
@@ -107,7 +173,7 @@ class VideoRAGAnswerer:
             start = time.time()
             resp = self.session.post(self.api_url, json=payload, headers=headers, timeout=12)
             elapsed = time.time() - start
-            self.logger.debug("RAG request %s %s (%.2fs) status=%s", self.api_url, self.model, elapsed, resp.status_code)
+            self.logger.debug("LLM request %s %s (%.2fs) status=%s", self.api_url, self.model, elapsed, resp.status_code)
             resp.raise_for_status()
             data = resp.json()
             # Validate expected structure

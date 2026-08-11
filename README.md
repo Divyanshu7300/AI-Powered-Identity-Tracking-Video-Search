@@ -1,93 +1,107 @@
-# MOT + Re-ID Video Search & Vision RAG System
+# 🎬 MOT + Re-ID Video Search & Vision RAG System
 
-A full-stack AI system for person detection, multi-object tracking (MOT), person re-identification (Re-ID), GPU batch frame processing, dual-zone attribute recognition, evidence capture, and searchable video memory.
+[![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
+[![Next.js](https://img.shields.io/badge/Next.js-16-black.svg)](https://nextjs.org/)
+[![PyTorch](https://img.shields.io/badge/PyTorch-2.0%2B-EE4C2C.svg)](https://pytorch.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.110%2B-009688.svg)](https://fastapi.tiangolo.com/)
+[![YOLOv8](https://img.shields.io/badge/YOLOv8-Ultralytics-00FFFF.svg)](https://docs.ultralytics.com/)
+[![ChromaDB](https://img.shields.io/badge/ChromaDB-0.5%2B-orange.svg)](https://www.trychroma.com/)
+[![Groq](https://img.shields.io/badge/LLM-Groq%20Llama%203.1-7C3AED.svg)](https://groq.com/)
 
-The backend uses **YOLOv8** for person detection, **TorchReID (OSNet)** embeddings for identity comparison, a **Hungarian Matcher** to maintain stable track IDs, **Dual-Zone Attribute Extractor** for upper/lower clothing recognition, and **CLIP + ChromaDB + Groq RAG** for natural-language text and image search over video memories. The frontend is a Next.js 16 dashboard for uploading videos, inspecting track memories, running image/text search, and exporting evidence clips.
+A full-stack, enterprise-grade AI system for **Person Detection**, **Multi-Object Tracking (MOT)**, **Person Re-Identification (Re-ID)**, **GPU Batch Processing**, **Dual-Zone Attribute Recognition**, **Vector Search**, and **Grounded Vision RAG (Retrieval-Augmented Generation)**.
 
 ---
 
-## Table of Contents
+## 📌 Table of Contents
 
 - [Key Capabilities](#key-capabilities)
 - [System Architecture](#system-architecture)
+- [Technical Innovations & Core Algorithms](#technical-innovations--core-algorithms)
 - [Repository Layout](#repository-layout)
 - [Requirements](#requirements)
-- [Quick Start](#quick-start)
-- [Running the Backend](#running-the-backend)
-- [Running the Frontend](#running-the-frontend)
-- [Docker Deployment](#docker-deployment)
+- [Quick Start Guide](#quick-start-guide)
+  - [1. Backend Setup](#1-backend-setup)
+  - [2. Frontend Setup](#2-frontend-setup)
 - [API Reference](#api-reference)
 - [Configuration & Environment Variables](#configuration--environment-variables)
+- [Privacy & Consent](#privacy--consent)
 - [Testing](#testing)
-- [Implemented Upgrades](#implemented-upgrades)
 - [Troubleshooting](#troubleshooting)
 
 ---
 
-## Key Capabilities
+## ⚡ Key Capabilities
 
-1. **GPU Batch Frame Processing**: Reads video frames in chunks (default 8 frames per batch) to perform batched YOLO detection and batched Re-ID feature encoding, accelerating pipeline throughput by 3x-5x.
-2. **Dual-Zone Clothing Attribute Recognition**: Automatically segments detected person crops into upper-body (shirt, jacket, top) and lower-body (trousers, pants, jeans) zones to index detailed appearance descriptions.
-3. **Multi-Object Tracking (MOT)**: Combines motion displacement, IoU, center distance, bounding box shape cost, and Re-ID cosine similarity for stable tracking across occlusions.
-4. **Re-ID Appearance Gallery**: Maintains a gallery of up to 8 distinct normalized embeddings per track to handle pose, lighting, and angle variations during image search.
-5. **Natural Language Text Search & Vision RAG**: Searches video observations via HuggingFace CLIP embeddings and ChromaDB vector search. Optionally generates grounded LLM answers using Groq (`llama-3.1-8b-instant`).
-6. **Person Image Search**: Compares an uploaded query image against live tracks and persisted embedding galleries.
-7. **Per-Track Evidence Clip Export**: Exports full-frame video segments containing the visible lifetime of a track with bounding box overlays.
-8. **Session Isolation & Non-blocking API**: Session IDs isolate jobs and runtime data while read-only search and analytics endpoints operate concurrently without locking video processing.
+1. **GPU Batch Frame Processing**: Reads video frames in chunks (default 8 frames per batch) to execute batched YOLO detection and TorchReID feature encoding, accelerating pipeline throughput by **3x to 5x**.
+2. **Dual-Zone Clothing Attribute Recognition**: Automatically segments detected person crops into upper-body (*shirt, jacket, top*) and lower-body (*trousers, pants, jeans*) zones to index detailed appearance color descriptions.
+3. **Multi-Object Tracking (MOT) & Hungarian Matcher**: Combines motion displacement, IoU, center distance, bounding box shape cost, and Re-ID cosine similarity for stable identity tracking across long occlusions.
+4. **Re-ID Diversity Gallery**: Maintains up to 8 distinct normalized 512-dimensional embeddings per track to handle pose, lighting, and camera angle variations during similarity search.
+5. **Natural Language Vision RAG**: Searches video observations via HuggingFace SigLIP/CLIP embeddings and ChromaDB vector search. Generates grounded LLM answers using Groq (`llama-3.1-8b-instant`).
+6. **Person Image Search**: Compares an uploaded query image against active tracks and persisted embedding galleries using a hybrid face + appearance scoring pipeline.
+7. **Evidence Capture & Video Clip Export**: Automatically isolates track visual evidence and exports annotated MP4 video segments with bounding box overlays.
+8. **Non-Blocking Session-Isolated API**: Isolates runtime jobs by session ID while read-only search and analytics endpoints operate concurrently without locking video processing.
 
 ---
 
-## System Architecture
+## 🏗️ System Architecture
 
-```text
-Video Upload / Local Run
-        |
-        v
-FastAPI Tracking Routes (`app/routes/tracking.py`)
-        |
-        v
-MOTReIDPipeline (`app/services/pipeline.py`)
-        |
-        +--> YOLODetector (`models/yolo.py`)
-        |       GPU Batched Person Bounding Box Detection
-        |
-        +--> ReIDEncoder (`models/reid_model.py`)
-        |       TorchReID OSNet (512-dim) Feature Extraction
-        |
-        +--> MultiObjectTracker (`tracking/tracker.py`)
-        |       Hungarian Matcher + Inactive Track Reactivation
-        |
-        +--> VisionMemoryEngine (`app/services/memory_engine.py`)
-        |       Saves crops, evidence frames, timestamps, and position tracking
-        |
-        +--> TrackPersistenceStore (`app/services/persistence.py`)
-        |       SQLite database (`data/mot_reid.sqlite3`) + `.npy` embedding gallery storage
-        |
-        +--> SemanticPersonSearchIndex (`app/services/semantic_search.py`)
-        |       Dual-zone upper/lower clothing extraction + CLIP + ChromaDB vector index
-        |
-        +--> VideoRAGAnswerer (`app/services/rag.py`)
-        |       Evidence grounded answer generation via Groq API
-        |
-        +--> TrackClipExporter (`app/services/clip_export.py`)
-                Exports annotated MP4 clips to `data/clips/`
-
-Next.js 16 Dashboard (`Frontend/`)
-        |
-        v
-Server Proxy (`Frontend/app/api/[...path]/route.js`)
-        |
-        v
-FastAPI Backend on http://127.0.0.1:8000
+```mermaid
+flowchart TD
+    UI[Next.js 16 Dashboard] -->|HTTP / API Proxy| API[FastAPI REST API Layer]
+    API -->|Async Job Manager| Pipe[MOTReIDPipeline Orchestrator]
+    
+    subgraph Processing_Engine [GPU Batch Frame Processing Engine]
+        Pipe -->|8-Frame Batch| YOLO[YOLOv8 Person Detector]
+        YOLO -->|Person Crops| ReID[TorchReID OSNet Encoder - 512d]
+        ReID -->|Detections + Embeddings| Tracker[MultiObjectTracker + Hungarian Matcher]
+    end
+    
+    Tracker -->|Track Lifecycles| MemEngine[Vision Memory & Evidence Store]
+    
+    subgraph Attribute_Vector_Indexing [Semantic Attribute & Vector Indexing]
+        MemEngine -->|Person Crops| DualZone[Dual-Zone Upper/Lower Clothing Extractor]
+        DualZone -->|Attributes + Crops| SigLIP[SigLIP / CLIP Vision-Language Encoder]
+        SigLIP -->|Text & Vision Embeddings| Chroma[ChromaDB Persistent Vector Collection]
+    end
+    
+    subgraph Search_RAG_Layer [Search & Vision RAG Layer]
+        SearchQuery[Text / Image Query] -->|Query Planner| AdaptSearch[Adaptive Multi-Pass Search Engine]
+        AdaptSearch <-->|Vector & Attribute Matching| Chroma
+        AdaptSearch <-->|Similarity Search| ReIDIndex[Re-ID Matrix Index]
+        AdaptSearch -->|Evidence Frames & Timestamps| GroqRAG[Groq LLM - Llama 3.1 Answer Generator]
+    end
+    
+    GroqRAG -->|Grounded Answer + Timestamps| UI
+    MemEngine -->|OpenCV Clip Exporter| MP4[Annotated Track Video Clips]
 ```
 
 ---
 
-## Repository Layout
+## 🧠 Technical Innovations & Core Algorithms
+
+### 1. Global Data Association (Hungarian Algorithm)
+The tracking engine calculates a unified global cost matrix between existing tracks $i$ and frame detections $j$:
+
+$$\text{Cost}_{i,j} = w_{\text{app}} \cdot \text{Cost}_{\text{appearance}} + (1 - w_{\text{app}}) \cdot \left(0.68 \cdot \text{Cost}_{\text{IoU}} + 0.24 \cdot \text{Cost}_{\text{center}} + 0.08 \cdot \text{Cost}_{\text{shape}}\right)$$
+
+Where global assignment is solved via SciPy's Linear Sum Assignment algorithm (`linear_sum_assignment`).
+
+### 2. Dual-Zone Upper/Lower Body Color Segmentation
+Person bounding box crops are divided vertically into upper half ($0 \dots \frac{H}{2}$) and lower half ($\frac{H}{2} \dots H$). Dominant RGB colors are computed and matched against calibrated Euclidean color centroids (black, white, red, yellow, green, blue, gray) to index multi-attribute search tags without heavy VLM latency.
+
+### 3. Adaptive Multi-Pass Query Planner
+User natural language queries undergo multi-stage execution:
+1. **Pass 1 (Exact Match)**: Enforces all explicit color, object, and spatial location filters.
+2. **Pass 2 (Controlled Relaxation)**: Softens secondary constraints (e.g. spatial zone) if exact evidence is limited.
+3. **Pass 3 (No-Result Guidance)**: Provides actionable guidance tips to refine search terms.
+
+---
+
+## 📁 Repository Layout
 
 ```text
 app/
-  main.py                FastAPI entrypoint, CORS setup, static file mounts (/outputs, /crops, /evidence, /clips).
+  main.py                FastAPI entrypoint, CORS setup, login and protected media downloads.
   routes/tracking.py     API endpoints: /run, /upload, /jobs, /search, /search/text, /analytics, /clips.
   services/
     pipeline.py          Pipeline orchestrator with process_frames_batch GPU batching.
@@ -114,58 +128,47 @@ utils/
   visualization.py       OpenCV video frame annotation.
 
 Frontend/
-  app/page.js            Next.js dashboard UI.
+  app/page.js            Next.js 16 dashboard UI.
   app/api/[...path]/     Server-side proxy forwarding API requests to FastAPI backend.
   next.config.mjs        Next.js configuration (distDir: .next-build).
-  Dockerfile             Production container build definition.
 
-data/                    Runtime storage (isolated from source code):
+data/users/<session-id>/ Runtime storage isolated per authenticated login session:
   input/uploads/         Uploaded video files.
   output/                Annotated tracking videos.
   crops/                 Saved person bounding box images.
   evidence/              Annotated full-frame evidence screenshots.
   clips/                 Exported track video clips.
   embeddings/            Persisted Re-ID embedding matrices (.npy).
-  cache/                 Downloaded model weights (YOLO, OSNet, CLIP).
   semantic_chroma/       Persistent ChromaDB vector collection.
   mot_reid.sqlite3       SQLite database storing run memories.
 ```
 
 ---
 
-## Requirements
+## 🛠️ Requirements
 
-- **Python**: 3.9 or newer
-- **Node.js**: 18 or 22
-- **npm**: 9 or newer
+- **Python**: `3.10` or newer
+- **Node.js**: `20.9` or newer
+- **npm**: `9` or newer
 - **OS**: macOS, Linux, or WSL
-- **Hardware**: GPU (CUDA) recommended for fast inference, CPU supported.
-
-Key Python dependencies (`requirements.txt`):
-- `ultralytics>=8.0.0`
-- `torch>=2.0.0`, `torchvision>=0.15.0`
-- `torchreid>=0.2.5`
-- `tensorboard>=2.14.0`
-- `fastapi>=0.110.0`, `uvicorn>=0.29.0`
-- `transformers>=4.40.0`, `chromadb>=0.5.0`
-- `opencv-python-headless`, `scipy`, `numpy`, `pillow`
+- **Hardware**: GPU (CUDA) recommended for high FPS, CPU supported.
 
 ---
 
-## Quick Start
+## 🚀 Quick Start Guide
 
 ### 1. Backend Setup
 
 ```bash
-# Create and activate virtual environment
+# 1. Create and activate a Python virtual environment
 python3 -m venv .venv
 source .venv/bin/activate
 
-# Install requirements
+# 2. Install dependencies
 pip install -r requirements.txt
 
-# Start FastAPI server
-uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+# 3. Launch FastAPI server
+uvicorn app.main:app --reload --reload-dir app --reload-dir tracking --reload-dir models --reload-dir utils --host 127.0.0.1 --port 8000
 ```
 
 Verify backend health:
@@ -175,64 +178,59 @@ curl http://127.0.0.1:8000/health
 
 ### 2. Frontend Setup
 
-In a second terminal:
+In a new terminal tab:
+
 ```bash
 cd Frontend
 npm install
 npm run dev
 ```
 
-Open your browser at `http://localhost:3000`.
+Open `http://localhost:3000` in your browser.
 
 ---
 
-## Docker Deployment
+## 📡 API Reference
 
-Run both backend and frontend using Docker Compose:
+### Health & Analytics
+| Method | Endpoint | Description |
+| :--- | :--- | :--- |
+| `GET` | `/health` | System status, GPU availability, data directories |
+| `GET` | `/tracking/analytics/dashboard` | Overall track count, active tracks, frames processed |
+| `GET` | `/tracking/analytics/tracks` | List indexed track memories |
 
-```bash
-docker compose up --build
-```
-
-- **Backend**: `http://localhost:8000`
-- **Frontend**: `http://localhost:3000`
-- **Data Volumes**: `./data` mounted locally; model weights stored in Docker volume `model-cache`.
-
----
-
-## API Reference
-
-### Health & Metrics
-- `GET /health` - Overall system health, job summary, data directory status.
-- `GET /tracking/health` - Session-scoped pipeline health status.
-- `GET /metrics` - Prometheus format metrics (job counts, model cache states).
+All `/tracking/*` and `/media/*` endpoints require a token from `POST /auth/login`. The backend keeps the token in an HTTP-only cookie for browser media requests and derives the private data namespace from the token; `x-session-id` is not used for identity.
 
 ### Video Processing & Jobs
-- `POST /tracking/upload` (Form Data: `file`, `detector_model`, `frame_stride`) - Uploads a video and starts a background tracking job. Returns `job_id`.
-- `POST /tracking/run` (JSON: `source_path`, `output_path`, `conf_threshold`, `match_threshold`) - Starts tracking on a local server video path.
-- `GET /tracking/jobs` - List all background jobs in current session.
-- `GET /tracking/jobs/{job_id}` - Check status and progress of a specific job.
-- `POST /tracking/jobs/{job_id}/cancel` - Request job cancellation.
-- `POST /tracking/jobs/{job_id}/retry` - Retry a failed/completed job.
-- `DELETE /tracking/jobs/{job_id}` - Delete job from history.
+| Method | Endpoint | Description |
+| :--- | :--- | :--- |
+| `POST` | `/tracking/upload` | Upload video file and start background tracking job |
+| `GET` | `/tracking/jobs` | List background jobs in active session |
+| `GET` | `/tracking/jobs/{job_id}` | Check status/progress of background job |
+| `POST` | `/tracking/jobs/{job_id}/cancel` | Request cancellation of running job |
 
-### Search
-- `POST /tracking/search?top_k=5` (Form Data: `file`) - Search person identity by query image crop.
-- `POST /tracking/search/text` (JSON: `query`, `top_k`, `start_time_seconds`, `end_time_seconds`) - Search person observations using natural language text query (Dual-zone attribute recognition + CLIP + RAG).
+### Search & RAG
+| Method | Endpoint | Description |
+| :--- | :--- | :--- |
+| `POST` | `/tracking/search` | Search person by uploaded crop image (Form-Data: `file`) |
+| `POST` | `/tracking/search/text` | Search person by natural language text query (JSON) |
+| `POST` | `/tracking/clips/{memory_id}` | Export MP4 video clip for a specific track memory |
 
-### Analytics & Clips
-- `GET /tracking/analytics/dashboard` - Summary metrics (total tracks, active tracks, frames processed, semantic observations).
-- `GET /tracking/analytics/tracks` - List track memories.
-- `GET /tracking/analytics/tracks/{memory_id}` - Detailed track memory timeline and evidence.
-- `POST /tracking/clips/{memory_id}` (JSON: `padding_frames`) - Export video clip for a track.
+#### Text Search Payload Example:
+```json
+{
+  "query": "man in red shirt and dark pants",
+  "top_k": 5,
+  "use_llm": true
+}
+```
 
 ---
 
-## Configuration & Environment Variables
+## ⚙️ Configuration & Environment Variables
 
-Create `.env` in root and `Frontend/.env` in the `Frontend/` folder:
+Root `.env` file configuration:
 
-### Root `.env`
 ```env
 BACKEND_PORT=8000
 FRONTEND_PORT=3000
@@ -240,22 +238,44 @@ CORS_ORIGIN=http://localhost:3000
 LOG_LEVEL=INFO
 MOT_REID_CACHE_DIR=data/cache
 MOT_REID_MAX_UPLOAD_BYTES=536870912
+MOT_REID_AUTH_USERNAME=admin
+MOT_REID_AUTH_PASSWORD=use-a-long-random-password
+MOT_REID_AUTH_SECRET=use-a-long-random-signing-secret
+MOT_REID_ALLOW_SIGNUP=false
+MOT_REID_AUTH_DB=data/auth/users.sqlite3
+COOKIE_SECURE=true
 
-# Optional Groq LLM API Key for grounded Video RAG answer generation
-GROQ_API_KEY=
+# Google sign-in (optional). Register this public callback URL in Google Cloud Console.
+GOOGLE_OAUTH_CLIENT_ID=
+GOOGLE_OAUTH_CLIENT_SECRET=
+MOT_REID_GOOGLE_REDIRECT_URI=https://your-app.com/api/auth/google/callback
+# Set true only when any verified Google account may create an operator account.
+MOT_REID_ALLOW_GOOGLE_SIGNUP=false
+
+# Groq LLM API Key for grounded Video RAG answer generation
+GROQ_API_KEY=your_groq_api_key_here
 GROQ_MODEL=llama-3.1-8b-instant
 ```
 
-### `Frontend/.env`
+Frontend `.env` (`Frontend/.env`):
 ```env
 API_BASE_URL=http://127.0.0.1:8000
 ```
 
 ---
 
-## Testing
+## Privacy & Consent
 
-Run the automated test suite from the repository root:
+- **Face and person embeddings are sensitive biometric data.** Process video only when you have consent, legal authorization, and a clear retention/deletion policy for generated crops, evidence frames, embeddings, clips, and SQLite records under `data/`.
+- **Groq RAG sends data to an external provider when enabled.** If `GROQ_API_KEY` is configured and text search uses `use_llm: true`, the backend sends the text query plus retrieved evidence metadata such as captions, track IDs, timestamps, bounding boxes, source labels, and scores to Groq for answer generation.
+- **Do not upload or analyze third-party footage without approval.** Review Groq's terms and privacy policy before enabling LLM answers in production, and disclose this external data sharing to users/operators.
+- **Data is isolated per login session.** Generated media and databases are stored below `data/users/<session-id>/`; the reset action only deletes the authenticated session's namespace.
+
+---
+
+## 🧪 Testing
+
+Run the automated test suite:
 
 ```bash
 .venv/bin/python -m pytest
@@ -263,24 +283,8 @@ Run the automated test suite from the repository root:
 
 ---
 
-## Implemented Upgrades
+## ❓ Troubleshooting
 
-| Upgrade | Description | File References |
-| --- | --- | --- |
-| **GPU Batch Frame Processing** | Batched YOLO detection and TorchReID encoding over 8-frame chunks (3x-5x speedup). | [yolo.py](file:///Users/divyanshunagar/Desktop/ai%20video/Ai/models/yolo.py), [pipeline.py](file:///Users/divyanshunagar/Desktop/ai%20video/Ai/app/services/pipeline.py) |
-| **Dual-Zone Attribute Recognition** | Upper-body (shirt/jacket) and lower-body (trousers/pants) attribute parser for multi-attribute text queries. | [semantic_search.py](file:///Users/divyanshunagar/Desktop/ai%20video/Ai/app/services/semantic_search.py) |
-| **TorchReID 512-dim Integration** | Added `tensorboard>=2.14.0` dependency to ensure full OSNet Re-ID embeddings without silent fallback. | [requirements.txt](file:///Users/divyanshunagar/Desktop/ai%20video/Ai/requirements.txt), [reid_model.py](file:///Users/divyanshunagar/Desktop/ai%20video/Ai/models/reid_model.py) |
-| **Frontend Docker Alignment** | Aligned Docker runner stage to copy `.next-build` build output matching `next.config.mjs`. | [Dockerfile](file:///Users/divyanshunagar/Desktop/ai%20video/Ai/Frontend/Dockerfile) |
-| **Workspace Cache Isolation** | Defaulted `MOT_REID_CACHE_DIR` to `data/cache` for OS-level permission safety. | [yolo.py](file:///Users/divyanshunagar/Desktop/ai%20video/Ai/models/yolo.py), [.env](file:///Users/divyanshunagar/Desktop/ai%20video/Ai/.env) |
-| **Non-blocking API Concurrency** | Removed coarse pipeline locks from read/search routes for smooth concurrent querying. | [tracking.py](file:///Users/divyanshunagar/Desktop/ai%20video/Ai/app/routes/tracking.py) |
-| **Path Security Validation** | Added strict file location and suffix checks for job retries. | [tracking.py](file:///Users/divyanshunagar/Desktop/ai%20video/Ai/app/routes/tracking.py) |
-| **SQLite Memory Persistence** | Persists run memories to `data/mot_reid.sqlite3` and embeddings to `data/embeddings/`. | [persistence.py](file:///Users/divyanshunagar/Desktop/ai%20video/Ai/app/services/persistence.py) |
-
----
-
-## Troubleshooting
-
-- **TorchReID Falls Back to Color Histogram**: Ensure `tensorboard` is installed (`pip install tensorboard`) and `data/cache` directory is writable.
-- **Frontend Docker Start Fails**: Verify `Frontend/Dockerfile` copies `.next-build` output folder.
-- **Text Search Returns No Matches**: Make sure a video has been processed in the current session so semantic observations are indexed.
-- **RAG Answers Unavailable**: Check if `GROQ_API_KEY` is set in `.env`.
+- **TorchReID Fallback to Histogram**: Ensure `tensorboard` is installed (`pip install tensorboard`) and `data/cache` is writable.
+- **RAG Answer Unavailable**: Verify `GROQ_API_KEY` is specified in root `.env`.
+- **Text Search Returns No Matches**: Ensure a video has been processed in the current session so observations are indexed in ChromaDB.

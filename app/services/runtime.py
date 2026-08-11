@@ -10,12 +10,13 @@ from app.services.pipeline import MOTReIDPipeline, PipelineConfig
 
 config = PipelineConfig(
     detector_model="yolov8n.pt",
-    reid_model_name="osnet_x0_25",
+    reid_model_name="osnet_ain_x1_0",
 )
 
 pipeline = MOTReIDPipeline(
     config,
     source_name="global",
+    data_root="data/users/default",
 )
 
 pipeline_lock = RLock()
@@ -38,6 +39,7 @@ def get_pipeline(session_id: str | None = None) -> MOTReIDPipeline:
         next_pipeline = MOTReIDPipeline(
             config=replace(config),
             source_name=normalized,
+            data_root=f"data/users/{normalized}",
         )
         _pipelines[normalized] = next_pipeline
         return next_pipeline
@@ -60,3 +62,23 @@ def replace_pipeline(next_pipeline: MOTReIDPipeline, session_id: str | None = No
         _pipelines[normalized] = next_pipeline
         if normalized == "default":
             pipeline = next_pipeline
+
+
+def reset_session(session_id: str | None = None) -> MOTReIDPipeline:
+    normalized = normalize_session_id(session_id)
+    with pipeline_lock:
+        existing = _pipelines.get(normalized)
+        if existing is not None:
+            existing.reset_all()
+        else:
+            existing = MOTReIDPipeline(
+                config=replace(config),
+                source_name=normalized,
+                data_root=f"data/users/{normalized}",
+            )
+        job_manager.clear_session(normalized)
+        _pipelines[normalized] = existing
+        if normalized == "default":
+            global pipeline
+            pipeline = existing
+        return existing

@@ -33,6 +33,21 @@ def cosine_distance(vec_a: np.ndarray, vec_b: np.ndarray) -> float:
     return 1.0 - float(np.dot(vec_a, vec_b) / denom)
 
 
+def track_appearance_distance(track, embedding: np.ndarray) -> float:
+    """Compare against a track's appearance gallery, not only its last crop.
+
+    During overlap, the latest crop can contain the foreground person and
+    corrupt the running embedding.  Retaining the best historical match keeps
+    the original identity available when the person reappears.
+    """
+    candidates = [getattr(track, "embedding", embedding)]
+    if hasattr(track, "embedding_candidates"):
+        gallery = track.embedding_candidates()
+        if getattr(gallery, "size", 0):
+            candidates = [candidate for candidate in gallery]
+    return min(cosine_distance(candidate, embedding) for candidate in candidates)
+
+
 def box_center(box: Sequence[float]) -> Tuple[float, float]:
     x1, y1, x2, y2 = box
     return (x1 + x2) / 2.0, (y1 + y2) / 2.0
@@ -86,7 +101,7 @@ def build_cost_matrix(tracks, detections, embeddings, appearance_weight: float =
             det_box = detection["bbox"]
             iou = compute_iou(track_box, det_box)
             iou_cost = 1.0 - iou
-            appearance_cost = cosine_distance(track.embedding, embeddings[det_idx])
+            appearance_cost = track_appearance_distance(track, embeddings[det_idx])
             center_cost = min(1.0, normalized_center_distance(track_box, det_box))
             shape_cost = shape_change_cost(track_box, det_box)
             missed = getattr(track, "missed", 0)
@@ -107,10 +122,17 @@ def build_cost_matrix(tracks, detections, embeddings, appearance_weight: float =
                 costs[track_idx, det_idx] = 1e6
                 continue
 
-            motion_weight = 1.0 - appearance_weight
+            # Spatial data becomes ambiguous when boxes overlap.  In that
+            # situation identity appearance gets a stronger vote.
+            overlaps_live_track = any(
+                other is not track and compute_iou(track_box, predicted_bbox(other)) >= 0.12
+                for other in tracks
+            )
+            effective_appearance_weight = max(appearance_weight, 0.72) if overlaps_live_track else appearance_weight
+            motion_weight = 1.0 - effective_appearance_weight
             spatial_cost = 0.68 * iou_cost + 0.24 * center_cost + 0.08 * shape_cost
             costs[track_idx, det_idx] = (
-                appearance_weight * appearance_cost + motion_weight * spatial_cost
+                effective_appearance_weight * appearance_cost + motion_weight * spatial_cost
             )
     return costs
 
