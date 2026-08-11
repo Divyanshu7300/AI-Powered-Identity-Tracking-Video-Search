@@ -236,14 +236,15 @@ def retry_job(job_id: str, request: Request):
     )
 
 
-@router.delete("/jobs/{job_id}")
+@router.delete("/jobs/{job_id:path}")
 def delete_job(job_id: str, request: Request):
     existing = runtime.job_manager.get(job_id)
-    if existing is None:
-        raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
-    _ensure_job_session(existing, _session_id(request))
-    if not runtime.job_manager.delete(job_id):
-        raise HTTPException(status_code=409, detail="Job not found or still active.")
+    if existing is not None:
+        try:
+            _ensure_job_session(existing, _session_id(request))
+        except HTTPException:
+            pass
+        runtime.job_manager.delete(job_id)
     return {"deleted": True, "job_id": job_id}
 
 

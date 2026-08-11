@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import React, { useState, useRef, useEffect, useMemo } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useAuth, useUser } from "@clerk/nextjs";
@@ -21,18 +21,31 @@ export default function Navbar() {
   const router = useRouter();
   const { isSignedIn, signOut } = useAuth();
   const { user } = useUser();
-  const [nativeUser, setNativeUser] = React.useState("");
+  const [nativeUser, setNativeUser] = useState("");
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const menuRef = useRef(null);
 
-  React.useEffect(() => {
+  useEffect(() => {
     fetchCurrentIdentity().then((identity) => {
       if (identity?.username) setNativeUser(identity.username);
     });
   }, []);
 
+  // Close dropdown on outside click
+  useEffect(() => {
+    function handleClickOutside(event) {
+      if (menuRef.current && !menuRef.current.contains(event.target)) {
+        setUserMenuOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
   const effectiveIsSignedIn = Boolean(isSignedIn || nativeUser || getUsername());
 
   const rawUser = user?.fullName || user?.primaryEmailAddress?.emailAddress || user?.username || nativeUser || getUsername();
-  const username = React.useMemo(() => {
+  const username = useMemo(() => {
     if (!rawUser) return "Operator";
     if (/^(user_|usr_|session_|anon_|[0-9a-f]{8}-[0-9a-f]{4}-|[a-z0-9]{20,})/i.test(rawUser)) {
       return "Operator";
@@ -80,11 +93,12 @@ export default function Navbar() {
   return (
     <header className="sticky top-0 z-50 w-full bg-white/80 backdrop-blur-xl border-b border-zinc-200/70">
       <div className="max-w-[1440px] mx-auto px-4 sm:px-6 lg:px-8 h-14 flex items-center justify-between gap-6">
-        {/* Brand */}
-        <Link href="/" className="shrink-0" title="AURA Platform & Architecture Home">
+        {/* Brand Logo */}
+        <Link href="/" className="shrink-0" title="AURA Platform Home">
           <AuraLogo />
         </Link>
 
+        {/* Desktop Navigation Links with Icon + Text */}
         <nav className="hidden md:flex items-center gap-1 p-1 rounded-xl bg-zinc-50/80 border border-zinc-100">
           {navItems.map((item) => {
             const Icon = item.icon;
@@ -95,38 +109,84 @@ export default function Navbar() {
                 href={item.href}
                 aria-label={item.name}
                 title={item.name}
-                className={`flex items-center justify-center w-8 h-8 rounded-lg text-sm font-medium transition-all ${
-                  isActive ? "bg-white text-zinc-900 shadow-sm" : "text-zinc-400 hover:text-zinc-900 hover:bg-white/70"
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                  isActive ? "bg-white text-zinc-900 shadow-sm" : "text-zinc-500 hover:text-zinc-900 hover:bg-white/70"
                 }`}
               >
                 <Icon className={`w-4 h-4 ${isActive ? "text-indigo-500" : ""}`} />
+                <span>{item.name}</span>
               </Link>
             );
           })}
         </nav>
 
-        {/* Right Controls — condensed into a single row */}
-        <div className="flex items-center gap-2.5 shrink-0">
-          <span
-            className="hidden sm:inline-flex w-1.5 h-1.5 rounded-full shrink-0"
-            style={{ backgroundColor: isOnline ? "#10B981" : "#F43F5E" }}
-            title={isOnline ? "Engine ready" : "Offline"}
-          />
-
+        {/* User Profile Badge & Dropdown */}
+        <div className="relative shrink-0" ref={menuRef}>
           <button
             type="button"
-            onClick={handleLogout}
-            className="hidden lg:block text-xs font-medium text-zinc-500 hover:text-rose-600 transition-colors"
+            onClick={() => setUserMenuOpen((prev) => !prev)}
+            className="flex items-center gap-2.5 p-1.5 pl-2.5 rounded-full bg-zinc-50 hover:bg-zinc-100 border border-zinc-200/80 transition-all cursor-pointer group"
           >
-            Log out
+            <span
+              className="w-2 h-2 rounded-full shrink-0"
+              style={{ backgroundColor: isOnline ? "#10B981" : "#F43F5E" }}
+              title={isOnline ? "Engine online" : "Engine offline"}
+            />
+            <span className="text-xs font-semibold text-zinc-800 max-w-[120px] truncate">
+              {username}
+            </span>
+            <div className="w-6 h-6 rounded-full bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center text-white text-[10px] font-bold shrink-0 shadow-xs">
+              {initial}
+            </div>
+            <svg
+              className={`w-3.5 h-3.5 text-zinc-400 group-hover:text-zinc-600 transition-transform duration-200 ${
+                userMenuOpen ? "rotate-180" : ""
+              }`}
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={2}
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+            </svg>
           </button>
 
-          <div
-            className="w-7 h-7 rounded-full bg-gradient-to-br from-indigo-400 to-violet-500 flex items-center justify-center text-white text-[11px] font-semibold shrink-0"
-            title={username}
-          >
-            {initial}
-          </div>
+          {/* User Dropdown Menu */}
+          {userMenuOpen && (
+            <div className="absolute right-0 mt-2 w-56 bg-white border border-zinc-200/80 rounded-2xl shadow-xl py-2 z-50 animate-in fade-in slide-in-from-top-2 duration-150 space-y-1">
+              <div className="px-4 py-2.5 border-b border-zinc-100">
+                <p className="text-xs font-semibold text-zinc-900 truncate">{username}</p>
+                <p className="text-[11px] text-zinc-400 font-medium flex items-center gap-1.5 mt-0.5">
+                  <span className={`w-1.5 h-1.5 rounded-full ${isOnline ? "bg-emerald-500" : "bg-rose-500"}`} />
+                  <span>{isOnline ? "Engine online" : "Engine offline"}</span>
+                </p>
+              </div>
+
+              <div className="px-1">
+                <Link
+                  href="/settings"
+                  onClick={() => setUserMenuOpen(false)}
+                  className="flex items-center gap-2 px-3 py-2 text-xs font-medium text-zinc-700 hover:bg-zinc-50 rounded-xl transition-colors"
+                >
+                  <SettingsIcon className="w-4 h-4 text-zinc-400" />
+                  <span>Account Settings</span>
+                </Link>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setUserMenuOpen(false);
+                    handleLogout();
+                  }}
+                  className="w-full flex items-center gap-2 px-3 py-2 text-xs font-semibold text-rose-600 hover:bg-rose-50 rounded-xl transition-colors cursor-pointer text-left"
+                >
+                  <svg className="w-4 h-4 text-rose-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+                  </svg>
+                  <span>Log out</span>
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 

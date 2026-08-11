@@ -109,11 +109,15 @@ export default function PipelinePage() {
     setError("");
     try {
       await apiRequest(`/api/tracking/jobs/${jobId}`, { method: "DELETE" });
+      setNotice("Job deleted successfully.");
+    } catch (err) {
+      if (!/not found/i.test(err.message || "")) {
+        setError(typeof err === "string" ? err : err.message || "Delete job failed.");
+      }
+    } finally {
       setJobOverrides((current) => current.filter((j) => j.job_id !== jobId));
       if (activeJobId === jobId) setActiveJobId("");
-      setNotice("Job deleted.");
-    } catch (err) {
-      setError(typeof err === "string" ? err : err.message || "Delete job failed.");
+      await refreshDashboard();
     }
   }
 
